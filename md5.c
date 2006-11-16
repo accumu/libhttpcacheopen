@@ -91,8 +91,8 @@ typedef struct {
 /* -- include the following line if the md5.h header file is separate -- */
 /* #include "md5.h" */
 
-static const char rcsid[] = /*Add RCS version string to binary */
-        "$Id$";
+static const char md5rcsid[] = /*Add RCS version string to binary */
+        "$Id: md5.c,v 1.1 2006/11/16 15:22:04 source Exp source $";
 
 /* forward declaration */
 static void Transform (UINT4 *buf, UINT4 *in);
