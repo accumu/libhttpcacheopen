@@ -19,8 +19,6 @@
 
 #include "md5.c"
 
-#define DEBUG
-
 #define CPBUFSIZE               262144
 #define CACHE_UPDATE_TIMEOUT    30      /* Note! In seconds! */
 #define MAX_COPY_SIZE           (150*1024*1024)
@@ -31,7 +29,7 @@
 #define CACHE_LOOP_SLEEP        200 /* in ms, lower than 1s */
 
 static const char rcsid[] = /*Add RCS version string to binary */
-        "$Id: httpcacheopen.c,v 1.1 2006/11/16 15:22:04 source Exp source $";
+        "$Id: httpcacheopen.c,v 1.2 2006/11/16 15:38:54 source Exp source $";
 
 
 static const char backend_root[]    = "/export/ftp/";
