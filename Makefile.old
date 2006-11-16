@@ -1,0 +1,22 @@
+# $Id$
+CC = gcc
+CFLAGS = -g -W -Wall -O -fPIC -shared
+#
+# Enable the modules you want
+#
+# safecgi.o: open/creat
+# exec.o: exec*
+#   needs: blacklist.o
+#
+OFILES = httpcacheopen.o
+
+libhttpcacheopen.so: ${OFILES}
+	gcc -nostdlib -fPIC -shared -o libhttpcacheopen.so ${OFILES} -lgcc -lc -ldl
+
+httpcacheopen.o: md5.c
+
+clean:
+	rm -f *~ *.o core
+
+realclean: clean
+	rm -f libhttpcacheopen.so
