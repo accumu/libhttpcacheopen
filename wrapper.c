@@ -31,7 +31,7 @@
 #define CACHE_LOOP_SLEEP        200 /* in ms, lower than 1s */
 
 static const char rcsid[] = /*Add RCS version string to binary */
-        "$Id$";
+        "$Id: httpcacheopen.c,v 1.1 2006/11/16 15:22:04 source Exp source $";
 
 
 static const char backend_root[]    = "/export/ftp/";
@@ -208,6 +208,7 @@ static copy_status copy_file(int srcfd, off64_t len, char *destfile) {
 #endif
     if( srcflags != -1 && (srcflags & O_NONBLOCK || !(srcflags & O_DIRECT)) ) {
         modflags = srcflags & ~O_NONBLOCK;
+        modflags |= O_DIRECT;
         if((fcntl(srcfd, F_SETFL, modflags)) == -1) {
 #ifdef DEBUG
             perror("httpcacheopen: copy_file: Failed changing fileflags");
