@@ -16,6 +16,7 @@
 #include <sys/param.h>
 #include <dlfcn.h>
 #include <stdio.h>
+#include <utime.h>
 
 #include "md5.c"
 
@@ -29,7 +30,7 @@
 #define CACHE_LOOP_SLEEP        200 /* in ms, lower than 1s */
 
 static const char rcsid[] = /*Add RCS version string to binary */
-        "$Id: httpcacheopen.c,v 1.2 2006/11/16 15:38:54 source Exp source $";
+        "$Id: httpcacheopen.c,v 1.3 2006/11/16 16:15:32 source Exp source $";
 
 
 static const char backend_root[]    = "/export/ftp/";
@@ -182,10 +183,13 @@ static int open_new_file(char *destfile) {
     return(-1);
 }
 
-static copy_status copy_file(int srcfd, off64_t len, char *destfile) {
-    int      destfd, srcflags, modflags;
-    char    *buf;
-    ssize_t amt, wrt, done;
+static copy_status copy_file(int srcfd, off64_t len, time_t mtime, 
+                             char *destfile) 
+{
+    int                 destfd, srcflags, modflags;
+    char                *buf;
+    ssize_t             amt, wrt, done;
+    struct utimbuf      ut;
 
     if(posix_memalign((void **) &buf, 512, CPBUFSIZE)) {
         return(COPY_FAIL);
@@ -267,6 +271,11 @@ static copy_status copy_file(int srcfd, off64_t len, char *destfile) {
         goto error_exit_noclose;
     }
 
+    /* Set mtime on file to same as source */
+    ut.actime = time(NULL);
+    ut.modtime = mtime;
+    utime(destfile, &ut);
+
     lseek64(srcfd, 0, SEEK_SET);
     if(srcflags != modflags) {
         fcntl(srcfd, F_SETFL, srcflags);
@@ -329,13 +338,38 @@ int open(const char *path, int oflag, /* mode_t mode */...) {
     /* If we get here, there are possibillities to use a cached copy of the
        file in the httpcache instead */
 
-    if(strncmp(path, backend_root, backend_len)) {
-        /* Not a backend file, ignore */
+    if(path[0] == '/') {
+        if(strncmp(path, backend_root, backend_len)) {
+            /* Not a backend file, ignore */
 #ifdef DEBUG
-        fprintf(stderr, "httpcacheopen: Not a backend file\n");
+            fprintf(stderr, "httpcacheopen: Not a backend file\n");
 #endif
-        return(realfd);
+            return(realfd);
+        }
     }
+    else {
+        /* Relative path *sigh* */
+        char fullpath[PATH_MAX+1];
+        if(!getcwd(fullpath, PATH_MAX)) {
+#ifdef DEBUG
+            perror("httpcacheopen: getcwd");
+#endif
+            return(realfd);
+        }
+        /* Build a complete filename just for the heck of it */
+        /* FIXME: Buffer overflows... */
+        strcat(fullpath, "/");
+        strcat(fullpath, path);
+
+        if(strncmp(fullpath, backend_root, backend_len)) {
+            /* Not a backend file, ignore */
+#ifdef DEBUG
+            fprintf(stderr, "httpcacheopen: Not a backend file 2\n");
+#endif
+            return(realfd);
+        }
+    }
+
 
     /* Calculate cachepath */
     strcpy(cachepath, cache_root);
@@ -358,7 +392,9 @@ int open(const char *path, int oflag, /* mode_t mode */...) {
 #endif
             return(realfd);
         }
-        if((copy_file(realfd, realst.st_size, cachepath)) == -1) {
+        if((copy_file(realfd, realst.st_size, realst.st_mtime, cachepath)) 
+                == -1) 
+        {
 #ifdef DEBUG
             perror("httpcacheopen: copy_file failed");
 #endif
@@ -384,10 +420,15 @@ int open(const char *path, int oflag, /* mode_t mode */...) {
         return(realfd);
     }
 
-    if(realst.st_mtime > cachest.st_mtime) {
+    if(realst.st_mtime > cachest.st_mtime ||
+            (realst.st_size != cachest.st_size && 
+               cachest.st_mtime < time(NULL) - CACHE_UPDATE_TIMEOUT)) 
+    {
         /* Bollocks, the cached file is stale */
         close(cachefd);
-        if((copy_file(realfd, realst.st_size, cachepath)) == -1) {
+        if((copy_file(realfd, realst.st_size, realst.st_mtime, cachepath)) 
+                == -1) 
+        {
 #ifdef DEBUG
             perror("httpcacheopen: copy_file failed 2");
 #endif
