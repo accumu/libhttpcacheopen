@@ -19,6 +19,7 @@
 #include <utime.h>
 
 #include "md5.c"
+#include "cleanpath.c"
 
 #define CPBUFSIZE               262144
 #define CACHE_UPDATE_TIMEOUT    30      /* Note! In seconds! */
@@ -30,7 +31,7 @@
 #define CACHE_LOOP_SLEEP        200 /* in ms, lower than 1s */
 
 static const char rcsid[] = /*Add RCS version string to binary */
-        "$Id: httpcacheopen.c,v 1.3 2006/11/16 16:15:32 source Exp source $";
+        "$Id: httpcacheopen.c,v 1.4 2006/11/16 19:54:14 source Exp source $";
 
 
 static const char backend_root[]    = "/export/ftp/";
@@ -43,7 +44,12 @@ static const int  cache_len         = sizeof(cache_root)-1;
 static int (*_open)(const char *, int, ...);
 static FILE *(*_fopen)(const char *, const char *);
 static FILE *(*_fopen64)(const char *, const char *);
+static int (*_chdir)(const char *);
+static int (*_chroot)(const char *);
 #endif
+
+static char *cachedwd;          /* Cached working directory */
+static char *chrootdir;         /* Dir we're chroot into */
 
 
 static void cache_hash(const char *it, char *val, int ndepth, int nlength)
@@ -87,12 +93,13 @@ static void cache_hash(const char *it, char *val, int ndepth, int nlength)
     val[i + 22 - k] = '\0';
 }
 
+#define MAX_MKDIR_RETRY 10
 static int mkdir_structure(char *path) {
     char *p = path + cache_len;
     int ret, retry=0;
 
     p = strchr(p, '/');
-    while(p && *p && retry < 10) {
+    while(p && *p && retry < MAX_MKDIR_RETRY) {
         *p = '\0';
         ret = mkdir(path, 0700);
         *p = '/';
@@ -109,6 +116,10 @@ static int mkdir_structure(char *path) {
             }
         }
         p = strchr(p, '/');
+    }
+
+    if(retry >= MAX_MKDIR_RETRY) {
+        return(-1);
     }
 
     return(0);
@@ -190,15 +201,16 @@ static copy_status copy_file(int srcfd, off64_t len, time_t mtime,
     char                *buf;
     ssize_t             amt, wrt, done;
     struct utimbuf      ut;
-
-    if(posix_memalign((void **) &buf, 512, CPBUFSIZE)) {
-        return(COPY_FAIL);
-    }
+    copy_status         rc = COPY_OK;
 
     destfd = open_new_file(destfile);
     if(destfd < 0) {
-        free(buf);
         return(destfd);
+    }
+
+    if(posix_memalign((void **) &buf, 512, CPBUFSIZE)) {
+        close(destfd);
+        return(COPY_FAIL);
     }
 
     /* Remove nonblocking IO if present... */
@@ -233,7 +245,8 @@ static copy_status copy_file(int srcfd, off64_t len, time_t mtime,
 #ifdef DEBUG
             perror("httpcacheopen: copy_file: read");
 #endif
-            goto error_exit;
+            rc = COPY_FAIL;
+            goto exit;
         }
         if(amt == 0) {
             break;
@@ -248,7 +261,8 @@ static copy_status copy_file(int srcfd, off64_t len, time_t mtime,
 #ifdef DEBUG
                 perror("httpcacheopen: copy_file: write");
 #endif
-                goto error_exit;
+                rc = COPY_FAIL;
+                goto exit;
             }
             done += wrt;
             amt -= wrt;
@@ -257,42 +271,39 @@ static copy_status copy_file(int srcfd, off64_t len, time_t mtime,
     }
 
     if(len != 0) {
+        /* Weird, didn't read expected amount */
 #ifdef DEBUG
         fprintf(stderr, "httpcacheopen: copy_file: len %lld left\n", len);
 #endif
-        /* Weird, didn't read expected amount */
-        goto error_exit;
+        rc = COPY_FAIL;
+        goto exit;
     }
+
+
+exit:
+    free(buf);
 
     if((close(destfd)) == -1) {
 #ifdef DEBUG
         perror("httpcacheopen: copy_file: close destfd");
 #endif
-        goto error_exit_noclose;
+        unlink(destfile);
+        rc = COPY_FAIL;
+    }
+    else {
+        /* Set mtime on file to same as source */
+        ut.actime = time(NULL);
+        ut.modtime = mtime;
+        utime(destfile, &ut);
     }
 
-    /* Set mtime on file to same as source */
-    ut.actime = time(NULL);
-    ut.modtime = mtime;
-    utime(destfile, &ut);
-
     lseek64(srcfd, 0, SEEK_SET);
+
     if(srcflags != modflags) {
         fcntl(srcfd, F_SETFL, srcflags);
     }
 
-    /* Success! */
-    return(COPY_OK);
-
-error_exit:
-    close(destfd);
-error_exit_noclose:
-    unlink(destfile);
-    lseek64(srcfd, 0, SEEK_SET);
-    if(srcflags != modflags) {
-        fcntl(srcfd, F_SETFL, srcflags);
-    }
-    return(COPY_FAIL);
+    return(rc);
 }
 
 int open(const char *path, int oflag, /* mode_t mode */...) {
@@ -301,7 +312,8 @@ int open(const char *path, int oflag, /* mode_t mode */...) {
     mode_t          mode;
     struct stat64   realst, cachest;
     struct timespec delay;
-    char            cachepath[PATH_MAX];
+    size_t          chrootdirlen;
+    char            realpath[PATH_MAX*2], cachepath[PATH_MAX];
 
     if(!path) {
         errno = ENOENT;
@@ -332,49 +344,50 @@ int open(const char *path, int oflag, /* mode_t mode */...) {
     }
 
     if(realfd == -1 || oflag & (O_WRONLY | O_RDWR)) {
+#ifdef DEBUG
+            fprintf(stderr, "httpcacheopen: Not Read-Only\n");
+#endif
         return(realfd);
     }
 
     /* If we get here, there are possibillities to use a cached copy of the
        file in the httpcache instead */
 
-    if(path[0] == '/') {
-        if(strncmp(path, backend_root, backend_len)) {
-            /* Not a backend file, ignore */
-#ifdef DEBUG
-            fprintf(stderr, "httpcacheopen: Not a backend file\n");
-#endif
-            return(realfd);
-        }
+    /* Assemble the real filesystem path */
+    if(chrootdir) {
+        strcpy(realpath, chrootdir);
     }
     else {
-        /* Relative path *sigh* */
-        char fullpath[PATH_MAX+1];
-        if(!getcwd(fullpath, PATH_MAX)) {
-#ifdef DEBUG
-            perror("httpcacheopen: getcwd");
-#endif
-            return(realfd);
-        }
-        /* Build a complete filename just for the heck of it */
-        /* FIXME: Buffer overflows... */
-        strcat(fullpath, "/");
-        strcat(fullpath, path);
+        realpath[0] = '\0';
+    }
+    chrootdirlen = strlen(realpath);
 
-        if(strncmp(fullpath, backend_root, backend_len)) {
-            /* Not a backend file, ignore */
-#ifdef DEBUG
-            fprintf(stderr, "httpcacheopen: Not a backend file 2\n");
-#endif
-            return(realfd);
+    if(path[0] == '/') {
+        strcat(realpath, path);
+    }
+    else {
+        if(cachedwd) {
+            strcat(realpath, cachedwd);
         }
+        strcat(realpath, "/");
+        strcat(realpath, path);
     }
 
+    /* We can't apply cleanpath on the complete path when chroot because
+       we could then be fooled by $chroot/../whatever ... */
+    cleanpath(realpath+chrootdirlen);
 
-    /* Calculate cachepath */
-    strcpy(cachepath, cache_root);
-    cache_hash(path, cachepath+cache_len, DIRLEVELS, DIRLENGTH);
-    strcat(cachepath, CACHE_BODY_SUFFIX);
+#ifdef DEBUG
+    fprintf(stderr, "httpcacheopen: realpath=%s\n", realpath);
+#endif
+
+    if(strncmp(realpath, backend_root, backend_len)) {
+        /* Not a backend file, ignore */
+#ifdef DEBUG
+        fprintf(stderr, "httpcacheopen: Not a backend file\n");
+#endif
+        return(realfd);
+    }
 
     if(fstat64(realfd, &realst) == -1) {
 #ifdef DEBUG
@@ -383,6 +396,16 @@ int open(const char *path, int oflag, /* mode_t mode */...) {
         /* Somewhere, something went very wrong */
         return(realfd);
     }
+
+    /* Ignore caching 0-length files */
+    if(realst.st_size == 0) {
+        return(realfd);
+    }
+
+    /* Calculate cachepath */
+    strcpy(cachepath, cache_root);
+    cache_hash(realpath, cachepath+cache_len, DIRLEVELS, DIRLENGTH);
+    strcat(cachepath, CACHE_BODY_SUFFIX);
 
     cachefd = _open(cachepath, oflag);
     if(cachefd == -1) {
@@ -567,4 +590,89 @@ FILE *fopen64(const char *filename, const char *mode) {
     return _fopen64(filename, mode);
 }
 
+int chdir(const char *path) {
+    int rc;
 
+#ifdef linux
+    if(!_chdir) {
+        _chdir = dlsym( RTLD_NEXT, "chdir" );
+        if(!_chdir) {
+            fprintf(stderr, "httpcacheopen: chdir(): Init failed\n");
+            exit(1);
+        }
+    }
+#endif
+
+    rc = _chdir(path);
+    if(rc == -1) {
+        return(-1);
+    }
+
+    if(!cachedwd) {
+        cachedwd = malloc(PATH_MAX*2);
+        cachedwd[0] = '\0';
+    }
+
+    /* Rely on _chdir having done max path length checking for us */
+    if(path[0] == '/') {
+        strcpy(cachedwd, path);
+    }
+    else {
+        strcat(cachedwd, "/");
+        strcat(cachedwd, path);
+    }
+
+    /* Remove . .. // */
+    cleanpath(cachedwd);
+
+#ifdef DEBUG
+    fprintf(stderr, "httpcacheopen: chdir: Cached %s\n", cachedwd);
+#endif
+
+    return(rc);
+}
+
+
+int chroot(const char *path) {
+    int rc;
+
+#ifdef linux
+    if(!_chroot) {
+        _chroot = dlsym( RTLD_NEXT, "chroot" );
+        if(!_chroot) {
+            fprintf(stderr, "httpcacheopen: chroot(): Init failed\n");
+            exit(1);
+        }
+    }
+#endif
+
+    rc = _chroot(path);
+    if(rc == -1) {
+        return(-1);
+    }
+
+    if(!chrootdir) {
+        chrootdir = malloc(PATH_MAX*2);
+        chrootdir[0] = '\0';
+    }
+
+    /* Rely on _chroot having done max path length checking for us */
+    /* FIXME: This won't handle multiple calls to chroot */
+    if(path[0] == '/') {
+        strcpy(chrootdir, path);
+    }
+    else if(cachedwd) {
+        strcpy(chrootdir, cachedwd);
+        strcat(chrootdir, "/");
+        strcat(chrootdir, path);
+    }
+
+    /* Remove . .. // */
+    cleanpath(chrootdir);
+
+#ifdef DEBUG
+    fprintf(stderr, "httpcacheopen: chroot: Cached %s\n", chrootdir);
+#endif
+
+    return(rc);
+}
