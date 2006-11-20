@@ -1,10 +1,10 @@
 
 static const char cleanpathrcsid[] = /*Add RCS version string to binary */
-        "$Id$";
+        "$Id: cleanpath.c,v 1.1 2006/11/18 19:05:45 source Exp source $";
 
 
 static void cleanpath(char * path) {
-    int         i, slash=0, lastc=0, slashoff=0;
+    int         i, slash=0, slashoff=0;
 
     if(path[0] != '/') {
         return;
@@ -35,9 +35,6 @@ static void cleanpath(char * path) {
             else {
                 slash = i;
             }
-        }
-        else {
-            lastc = i;
         }
         path[i-slashoff] = path[i];
     }
