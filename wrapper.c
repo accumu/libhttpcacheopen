@@ -31,7 +31,7 @@
 #define CACHE_LOOP_SLEEP        200 /* in ms, lower than 1s */
 
 static const char rcsid[] = /*Add RCS version string to binary */
-        "$Id: httpcacheopen.c,v 1.4 2006/11/16 19:54:14 source Exp source $";
+        "$Id: httpcacheopen.c,v 1.5 2006/11/18 19:05:34 source Exp source $";
 
 
 static const char backend_root[]    = "/export/ftp/";
@@ -45,11 +45,9 @@ static int (*_open)(const char *, int, ...);
 static FILE *(*_fopen)(const char *, const char *);
 static FILE *(*_fopen64)(const char *, const char *);
 static int (*_chdir)(const char *);
-static int (*_chroot)(const char *);
 #endif
 
 static char *cachedwd;          /* Cached working directory */
-static char *chrootdir;         /* Dir we're chroot into */
 
 
 static void cache_hash(const char *it, char *val, int ndepth, int nlength)
@@ -312,7 +310,6 @@ int open(const char *path, int oflag, /* mode_t mode */...) {
     mode_t          mode;
     struct stat64   realst, cachest;
     struct timespec delay;
-    size_t          chrootdirlen;
     char            realpath[PATH_MAX*2], cachepath[PATH_MAX];
 
     if(!path) {
@@ -354,28 +351,17 @@ int open(const char *path, int oflag, /* mode_t mode */...) {
        file in the httpcache instead */
 
     /* Assemble the real filesystem path */
-    if(chrootdir) {
-        strcpy(realpath, chrootdir);
-    }
-    else {
-        realpath[0] = '\0';
-    }
-    chrootdirlen = strlen(realpath);
-
     if(path[0] == '/') {
-        strcat(realpath, path);
+        strcpy(realpath, path);
     }
     else {
         if(cachedwd) {
-            strcat(realpath, cachedwd);
+            strcpy(realpath, cachedwd);
         }
         strcat(realpath, "/");
         strcat(realpath, path);
     }
-
-    /* We can't apply cleanpath on the complete path when chroot because
-       we could then be fooled by $chroot/../whatever ... */
-    cleanpath(realpath+chrootdirlen);
+    cleanpath(realpath);
 
 #ifdef DEBUG
     fprintf(stderr, "httpcacheopen: realpath=%s\n", realpath);
@@ -627,51 +613,6 @@ int chdir(const char *path) {
 
 #ifdef DEBUG
     fprintf(stderr, "httpcacheopen: chdir: Cached %s\n", cachedwd);
-#endif
-
-    return(rc);
-}
-
-
-int chroot(const char *path) {
-    int rc;
-
-#ifdef linux
-    if(!_chroot) {
-        _chroot = dlsym( RTLD_NEXT, "chroot" );
-        if(!_chroot) {
-            fprintf(stderr, "httpcacheopen: chroot(): Init failed\n");
-            exit(1);
-        }
-    }
-#endif
-
-    rc = _chroot(path);
-    if(rc == -1) {
-        return(-1);
-    }
-
-    if(!chrootdir) {
-        chrootdir = malloc(PATH_MAX*2);
-        chrootdir[0] = '\0';
-    }
-
-    /* Rely on _chroot having done max path length checking for us */
-    /* FIXME: This won't handle multiple calls to chroot */
-    if(path[0] == '/') {
-        strcpy(chrootdir, path);
-    }
-    else if(cachedwd) {
-        strcpy(chrootdir, cachedwd);
-        strcat(chrootdir, "/");
-        strcat(chrootdir, path);
-    }
-
-    /* Remove . .. // */
-    cleanpath(chrootdir);
-
-#ifdef DEBUG
-    fprintf(stderr, "httpcacheopen: chroot: Cached %s\n", chrootdir);
 #endif
 
     return(rc);
