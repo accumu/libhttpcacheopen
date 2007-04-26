@@ -31,7 +31,7 @@
 #define CACHE_LOOP_SLEEP        200 /* in ms, lower than 1s */
 
 static const char rcsid[] = /*Add RCS version string to binary */
-        "$Id: httpcacheopen.c,v 1.5 2006/11/18 19:05:34 source Exp source $";
+        "$Id: httpcacheopen.c,v 1.6 2006/11/23 15:35:33 source Exp source $";
 
 
 static const char backend_root[]    = "/export/ftp/";
@@ -305,12 +305,15 @@ exit:
 }
 
 int open(const char *path, int oflag, /* mode_t mode */...) {
-    va_list         ap;
-    int             realfd, cachefd;
-    mode_t          mode;
-    struct stat64   realst, cachest;
-    struct timespec delay;
-    char            realpath[PATH_MAX*2], cachepath[PATH_MAX];
+    va_list             ap;
+    int                 realfd, cachefd;
+    mode_t              mode;
+    struct stat64       realst, cachest;
+    struct timespec     delay;
+    char                realpath[PATH_MAX*2], cachepath[PATH_MAX];
+    char                devinostr[34];
+    unsigned long long  inode, device;
+
 
     if(!path) {
         errno = ENOENT;
@@ -388,9 +391,16 @@ int open(const char *path, int oflag, /* mode_t mode */...) {
         return(realfd);
     }
 
+    /* Hash on device:inode to eliminate file duplication. Since we only
+       can serve plain files we don't have to bother with all the special
+       cases in mod_disk_cache :) */
+    device = realst.st_dev; /* Avoid ifdef-hassle with types */
+    inode  = realst.st_ino;
+    snprintf(devinostr, sizeof(devinostr), "%016llx:%016llx", device, inode);
+
     /* Calculate cachepath */
     strcpy(cachepath, cache_root);
-    cache_hash(realpath, cachepath+cache_len, DIRLEVELS, DIRLENGTH);
+    cache_hash(devinostr, cachepath+cache_len, DIRLEVELS, DIRLENGTH);
     strcat(cachepath, CACHE_BODY_SUFFIX);
 
     cachefd = _open(cachepath, oflag);
