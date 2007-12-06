@@ -1,7 +1,9 @@
 #define _GNU_SOURCE 1
 #define _XOPEN_SOURCE 600
+#define _ALL_SOURCE 1
 
 #define _LARGEFILE64_SOURCE 1
+#define _LARGE_FILE_API 1
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -18,291 +20,90 @@
 #include <stdio.h>
 #include <utime.h>
 
-#include "md5.c"
+#include "config.h"
 #include "cleanpath.c"
-
-#define CPBUFSIZE               262144
-#define CACHE_UPDATE_TIMEOUT    30      /* Note! In seconds! */
-#define MAX_COPY_SIZE           (150*1024*1024)
-#define DIRLENGTH               1
-#define DIRLEVELS               2
-#define CACHE_BODY_SUFFIX       ".body"
-
-#define CACHE_LOOP_SLEEP        200 /* in ms, lower than 1s */
+#include "cacheopen.c"
 
 static const char rcsid[] = /*Add RCS version string to binary */
-        "$Id: httpcacheopen.c,v 1.6 2006/11/23 15:35:33 source Exp source $";
+        "$Id: httpcacheopen.c,v 1.7 2007/04/26 10:40:29 source Exp source $";
 
 
-static const char backend_root[]    = "/export/ftp/";
-static const char cache_root[]      = "/httpcache/";
-
-static const int  backend_len       = sizeof(backend_root)-1;
-static const int  cache_len         = sizeof(cache_root)-1;
-
-#ifdef linux
+/* Declarations for the real functions that we override */
 static int (*_open)(const char *, int, ...);
 static FILE *(*_fopen)(const char *, const char *);
 static FILE *(*_fopen64)(const char *, const char *);
 static int (*_chdir)(const char *);
-#endif
+static char *(*_getcwd)(char *, size_t);
+static int (*_stat)(const char *, struct stat *);
+static int (*_stat64)(const char *, struct stat64 *);
+static int (*_lstat)(const char *, struct stat *);
+static int (*_lstat64)(const char *, struct stat64 *);
+static int (*_readlink)(const char *, char *, size_t);
+
+#define GET_REAL_SYMBOL(a) \
+if(! _##a) { \
+    (void *) _##a = dlsym( RTLD_NEXT, #a ); \
+    if(!_##a) { \
+        perror("httpcacheopen: " #a "(): Init failed"); \
+        exit(1); \
+    } \
+}
 
 static char *cachedwd;          /* Cached working directory */
+static char *chrootdir;         /* chroot():ed directory, if any */
 
 
-static void cache_hash(const char *it, char *val, int ndepth, int nlength)
-{
-    MD5_CTX context;
-    char tmp[22];
-    int i, k, d;
-    unsigned int x;
-    static const char enc_table[64] =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_@";
+/* Returns the cleaned path with an eventual chroot prepended */
+/* Assumes buf is PATH_MAX in size */
+static int get_full_path(char *buf, const char *path) {
+    char pathcleaned[PATH_MAX];
 
-    MD5Init(&context);
-    MD5Update(&context, (unsigned char *) it, strlen(it));
-    MD5Final(&context);
-
-    /* encode 128 bits as 22 characters, using a modified uuencoding
-     * the encoding is 3 bytes -> 4 characters* i.e. 128 bits is
-     * 5 x 3 bytes + 1 byte -> 5 * 4 characters + 2 characters
-     */
-    for (i = 0, k = 0; i < 15; i += 3) {
-        x = (context.digest[i] << 16) | (context.digest[i + 1] << 8) | context.digest[i + 2];
-        tmp[k++] = enc_table[x >> 18];
-        tmp[k++] = enc_table[(x >> 12) & 0x3f];
-        tmp[k++] = enc_table[(x >> 6) & 0x3f];
-        tmp[k++] = enc_table[x & 0x3f];
-    }
-
-    /* one byte left */
-    x = context.digest[15];
-    tmp[k++] = enc_table[x >> 2];    /* use up 6 bits */
-    tmp[k++] = enc_table[(x << 4) & 0x3f];
-
-    /* now split into directory levels */
-    for (i = k = d = 0; d < ndepth; ++d) {
-        memcpy(&val[i], &tmp[k], nlength);
-        k += nlength;
-        val[i + nlength] = '/';
-        i += nlength + 1;
-    }
-    memcpy(&val[i], &tmp[k], 22 - k);
-    val[i + 22 - k] = '\0';
-}
-
-#define MAX_MKDIR_RETRY 10
-static int mkdir_structure(char *path) {
-    char *p = path + cache_len;
-    int ret, retry=0;
-
-    p = strchr(p, '/');
-    while(p && *p && retry < MAX_MKDIR_RETRY) {
-        *p = '\0';
-        ret = mkdir(path, 0700);
-        *p = '/';
-        p++;
-        if(ret == -1) {
-            if(errno == ENOENT) {
-                /* Someone removed the directory tree while we were at it,
-                   redo from start... */
-                retry++;
-                p = path + cache_len;
-            }
-            else if(errno != EEXIST) {
-                return(-1);
-            }
+    /* Copy the absolute path (ie. the one inside the current chroot
+       and clean it from . .. // */
+    if(path[0] == '/') {
+        /* New path is absolute */
+        if(strlen(path) + 1 > PATH_MAX) {
+            errno = ENAMETOOLONG;
+            return -1;
         }
-        p = strchr(p, '/');
+        strcpy(pathcleaned, path);
     }
-
-    if(retry >= MAX_MKDIR_RETRY) {
-        return(-1);
-    }
-
-    return(0);
-}
-
-typedef enum copy_status {
-    COPY_FAIL = -1,
-    COPY_EXISTS = -2,
-    COPY_OK = 0
-} copy_status;
-
-static int open_new_file(char *destfile) {
-    int fd;
-    int flags = O_WRONLY | O_CREAT | O_EXCL | O_LARGEFILE;
-    mode_t mode = S_IRUSR | S_IWUSR;
-
-    while(1) {
-        fd = _open(destfile, flags, mode);
-        if(fd != -1) {
-#ifdef DEBUG
-            fprintf(stderr, "httpcacheopen: open_new_file: Opened %s\n",
-                    destfile);
-#endif
-            return(fd);
+    else if(cachedwd) {
+        /* Yikes, relative path */
+        if(strlen(cachedwd) + strlen(path) + 2 > PATH_MAX) {
+            errno = ENAMETOOLONG;
+            return -1;
         }
-#ifdef DEBUG
-        perror("httpcacheopen: open_new_file");
-#endif
-        if(errno == EEXIST) {
-            struct stat64 st;
-
-            if((stat64(destfile, &st)) == -1) {
-                if(errno == ENOENT) {
-                    /* Already removed, try again */
-                    continue;
-                }
-                else {
-                    return(-1);
-                }
-            }
-
-            if(st.st_mtime < time(NULL) - CACHE_UPDATE_TIMEOUT) {
-                /* Something stale */
-                if((unlink(destfile)) == -1) {
-                    if(errno == ENOENT) {
-                        /* Already removed, try again */
-                        continue;
-                    }
-                    else {
-                        return(-1);
-                    }
-                }
-
-            }
-            else {
-                /* Someone else beat us to this */
-                return(COPY_EXISTS);
-            }
-        }
-        else if(errno == ENOENT) {
-            /* Directory missing, create and try again */
-            if((mkdir_structure(destfile)) == -1) {
-                return(-1);
-            }
-        }
-        else {
-            return(-1);
-        }
-    }
-
-    errno = EFAULT;
-    return(-1);
-}
-
-static copy_status copy_file(int srcfd, off64_t len, time_t mtime, 
-                             char *destfile) 
-{
-    int                 destfd, srcflags, modflags;
-    char                *buf;
-    ssize_t             amt, wrt, done;
-    struct utimbuf      ut;
-    copy_status         rc = COPY_OK;
-
-    destfd = open_new_file(destfile);
-    if(destfd < 0) {
-        return(destfd);
-    }
-
-    if(posix_memalign((void **) &buf, 512, CPBUFSIZE)) {
-        close(destfd);
-        return(COPY_FAIL);
-    }
-
-    /* Remove nonblocking IO if present... */
-    srcflags = modflags = fcntl(srcfd, F_GETFL);
-#ifdef DEBUG
-    if(srcflags == -1) {
-        perror("fcntl");
-    }
-#endif
-    if( srcflags != -1 && (srcflags & O_NONBLOCK || !(srcflags & O_DIRECT)) ) {
-        modflags = srcflags & ~O_NONBLOCK;
-        modflags |= O_DIRECT;
-        if((fcntl(srcfd, F_SETFL, modflags)) == -1) {
-#ifdef DEBUG
-            perror("httpcacheopen: copy_file: Failed changing fileflags");
-#endif
-            modflags = srcflags;
-        }
-#ifdef DEBUG
-        else {
-            fprintf(stderr, "httpcacheopen: copy_file: Modified file flags\n");
-        }
-#endif
-    }
-
-    while(len > 0) {
-        amt = read(srcfd, buf, CPBUFSIZE);
-        if(amt == -1) {
-            if(errno == EINTR) {
-                continue;
-            }
-#ifdef DEBUG
-            perror("httpcacheopen: copy_file: read");
-#endif
-            rc = COPY_FAIL;
-            goto exit;
-        }
-        if(amt == 0) {
-            break;
-        }
-        done = 0;
-        while(amt > 0) {
-            wrt = write(destfd, buf+done, amt);
-            if(amt == -1) {
-                if(errno == EINTR) {
-                    continue;
-                }
-#ifdef DEBUG
-                perror("httpcacheopen: copy_file: write");
-#endif
-                rc = COPY_FAIL;
-                goto exit;
-            }
-            done += wrt;
-            amt -= wrt;
-            len -= wrt;
-        }
-    }
-
-    if(len != 0) {
-        /* Weird, didn't read expected amount */
-#ifdef DEBUG
-        fprintf(stderr, "httpcacheopen: copy_file: len %lld left\n", len);
-#endif
-        rc = COPY_FAIL;
-        goto exit;
-    }
-
-
-exit:
-    free(buf);
-
-    if((close(destfd)) == -1) {
-#ifdef DEBUG
-        perror("httpcacheopen: copy_file: close destfd");
-#endif
-        unlink(destfile);
-        rc = COPY_FAIL;
+        strcpy(pathcleaned, cachedwd);
+        strcat(pathcleaned, "/");
+        strcat(pathcleaned, path);
     }
     else {
-        /* Set mtime on file to same as source */
-        ut.actime = time(NULL);
-        ut.modtime = mtime;
-        utime(destfile, &ut);
+        strcpy(pathcleaned, path);
+    }
+    cleanpath(pathcleaned);
+
+    /* Prepend current chroot, if any */
+    if(chrootdir != NULL) {
+        if(strlen(chrootdir) + strlen(pathcleaned) + 1 > PATH_MAX) {
+            errno = ENAMETOOLONG;
+            return -1;
+        }
+        strcpy(buf, chrootdir);
+    }
+    else {
+        buf[0] = '\0';
     }
 
-    lseek64(srcfd, 0, SEEK_SET);
+    strcat(buf, pathcleaned);
 
-    if(srcflags != modflags) {
-        fcntl(srcfd, F_SETFL, srcflags);
-    }
+#ifdef DEBUG
+    fprintf(stderr, "httpcacheopen: get_full_path: path=%s buf=%s\n", path,buf);
+#endif
 
-    return(rc);
+    return 0;
 }
+
 
 int open(const char *path, int oflag, /* mode_t mode */...) {
     va_list             ap;
@@ -310,9 +111,7 @@ int open(const char *path, int oflag, /* mode_t mode */...) {
     mode_t              mode;
     struct stat64       realst, cachest;
     struct timespec     delay;
-    char                realpath[PATH_MAX*2], cachepath[PATH_MAX];
-    char                devinostr[34];
-    unsigned long long  inode, device;
+    char                realpath[PATH_MAX];
 
 
     if(!path) {
@@ -321,59 +120,40 @@ int open(const char *path, int oflag, /* mode_t mode */...) {
     }
 
 #ifdef DEBUG
-    fprintf(stderr, "httpcacheopen: open %s\n", path);
+    fprintf(stderr, "open: path=%s\n", path);
 #endif
 
-#ifdef linux
-    if(!_open) {
-        _open = dlsym( RTLD_NEXT, "open" );
-        if(!_open) {
-            fprintf(stderr, "httpcacheopen: open(): Init failed\n");
-        }
+    GET_REAL_SYMBOL(open);
+
+    if(get_full_path(realpath, path) == -1) {
+#ifdef DEBUG
+        perror("open: get_full_path failed");
+#endif
+        return -1;
     }
+
+#ifdef DEBUG
+    fprintf(stderr, "open: realpath=%s\n", realpath);
 #endif
 
     if(oflag & O_CREAT) {
         va_start(ap, oflag);
         mode = va_arg(ap, mode_t);
         va_end(ap);
-        realfd = _open(path, oflag, mode);
+        realfd = _open(realpath, oflag, mode);
     }
     else {
-        realfd = _open(path, oflag);
+        realfd = _open(realpath, oflag);
     }
 
     if(realfd == -1 || oflag & (O_WRONLY | O_RDWR)) {
 #ifdef DEBUG
-            fprintf(stderr, "httpcacheopen: Not Read-Only\n");
-#endif
-        return(realfd);
-    }
-
-    /* If we get here, there are possibillities to use a cached copy of the
-       file in the httpcache instead */
-
-    /* Assemble the real filesystem path */
-    if(path[0] == '/') {
-        strcpy(realpath, path);
-    }
-    else {
-        if(cachedwd) {
-            strcpy(realpath, cachedwd);
+        if(realfd == -1) {
+            perror("open realfd");
         }
-        strcat(realpath, "/");
-        strcat(realpath, path);
-    }
-    cleanpath(realpath);
-
-#ifdef DEBUG
-    fprintf(stderr, "httpcacheopen: realpath=%s\n", realpath);
-#endif
-
-    if(strncmp(realpath, backend_root, backend_len)) {
-        /* Not a backend file, ignore */
-#ifdef DEBUG
-        fprintf(stderr, "httpcacheopen: Not a backend file\n");
+        else {
+            fprintf(stderr, "open: Not read-only, oflag=%x\n", oflag);
+        }
 #endif
         return(realfd);
     }
@@ -383,97 +163,31 @@ int open(const char *path, int oflag, /* mode_t mode */...) {
             perror("Unable to fstat realfd");
 #endif
         /* Somewhere, something went very wrong */
+        return -1;
+    }
+
+    if(realst.st_size > MAX_COPY_SIZE) {
+#ifdef DEBUG
+        fprintf(stderr, "open: Filesize over copy sizelimit\n");
+#endif
         return(realfd);
     }
 
-    /* Ignore caching 0-length files */
-    if(realst.st_size == 0) {
-        return(realfd);
-    }
+    /* If we get here, there are possibillities to use a cached copy of the
+       file in the httpcache instead */
 
-    /* Hash on device:inode to eliminate file duplication. Since we only
-       can serve plain files we don't have to bother with all the special
-       cases in mod_disk_cache :) */
-    device = realst.st_dev; /* Avoid ifdef-hassle with types */
-    inode  = realst.st_ino;
-    snprintf(devinostr, sizeof(devinostr), "%016llx:%016llx", device, inode);
-
-    /* Calculate cachepath */
-    strcpy(cachepath, cache_root);
-    cache_hash(devinostr, cachepath+cache_len, DIRLEVELS, DIRLENGTH);
-    strcat(cachepath, CACHE_BODY_SUFFIX);
-
-    cachefd = _open(cachepath, oflag);
+    GET_REAL_SYMBOL(stat64);
+    cachefd = cacheopen(&cachest, realfd, &realst, realpath, oflag, _open, _stat64);
     if(cachefd == -1) {
-        if(realst.st_size > MAX_COPY_SIZE) {
-#ifdef DEBUG
-            fprintf(stderr, "httpcacheopen: File over copy sizelimit\n");
-#endif
-            return(realfd);
-        }
-        if((copy_file(realfd, realst.st_size, realst.st_mtime, cachepath)) 
-                == -1) 
-        {
-#ifdef DEBUG
-            perror("httpcacheopen: copy_file failed");
-#endif
-            return(realfd);
-        }
-        /* We have either copied the file, or another process is already
-         * caching the file and we need to wait for it to finish */
-        cachefd = _open(cachepath, oflag);
-        if(cachefd == -1) {
-#ifdef DEBUG
-            perror("httpcacheopen: open cachefd after copy_file 1");
-#endif
-            return(realfd);
-        }
-    }
-
-    if(fstat64(cachefd, &cachest) == -1) {
-#ifdef DEBUG
-        perror("httpcacheopen: Unable to fstat cachefd");
-#endif
-        /* Oh well, fallback to use the real file */
-        close(cachefd);
         return(realfd);
     }
 
-    if(realst.st_mtime > cachest.st_mtime ||
-            (realst.st_size != cachest.st_size && 
-               cachest.st_mtime < time(NULL) - CACHE_UPDATE_TIMEOUT)) 
-    {
-        /* Bollocks, the cached file is stale */
-        close(cachefd);
-        if((copy_file(realfd, realst.st_size, realst.st_mtime, cachepath)) 
-                == -1) 
-        {
-#ifdef DEBUG
-            perror("httpcacheopen: copy_file failed 2");
-#endif
-            return(realfd);
-        }
-        cachefd = _open(cachepath, oflag);
-        if(cachefd == -1) {
-#ifdef DEBUG
-            perror("httpcacheopen: open cachefd after copy_file 2");
-#endif
-            return(realfd);
-        }
-        if(fstat64(cachefd, &cachest) == -1) {
-#ifdef DEBUG
-            perror("httpcacheopen: Unable to fstat cachefd 2");
-#endif
-            close(cachefd);
-            return(realfd);
-        }
-    }
-
+    /* cacheopen() fills in cachest for us */
     while(realst.st_size != cachest.st_size) {
         if(cachest.st_mtime < time(NULL) - CACHE_UPDATE_TIMEOUT) {
 #ifdef DEBUG
             fprintf(stderr, 
-                    "httpcacheopen: Timed out waiting for cached file\n");
+                    "open: Timed out waiting for cached file\n");
 #endif
             /* Caching timed out */
             close(cachefd);
@@ -484,22 +198,18 @@ int open(const char *path, int oflag, /* mode_t mode */...) {
         nanosleep(&delay, NULL);
         if(fstat64(cachefd, &cachest) == -1) {
 #ifdef DEBUG
-            perror("httpcacheopen: Unable to fstat cachefd 3");
+            perror("open: Unable to fstat cachefd 3");
 #endif
             close(cachefd);
             return(realfd);
         }
     }
 
-#ifdef DEBUG
-    fprintf(stderr, "httpcacheopen: Success, returning cached fd %s\n", 
-            cachepath);
-#endif
-
     /* Victory! */
     close(realfd);
     return(cachefd);
 }
+
 
 int open64(const char *path, int oflag, /* mode_t mode */...){
     int tmp;
@@ -521,6 +231,7 @@ int open64(const char *path, int oflag, /* mode_t mode */...){
     return tmp;
 }
 
+
 FILE *fopen(const char *filename, const char *mode) {
 
     if(!filename || !mode) {
@@ -529,26 +240,31 @@ FILE *fopen(const char *filename, const char *mode) {
     }
 
     /* The only readonly-mode is r and rb */
-    if(strncmp(mode,"r+", 2) && strncmp(mode,"rb+", 3) && 
+    if(strncmp(mode,"r+", 2) && strncmp(mode,"rb+", 3) &&
             !strncmp(mode, "r", 1)) 
     {
-        int fd = open(filename, O_RDONLY);
+        int fd;
+
+        fd = open64(filename, O_RDONLY);
         if(fd == -1) {
             return NULL;
         }
         return fdopen(fd, mode);
     }
 
+    GET_REAL_SYMBOL(fopen);
+    if(chrootdir) {
+        char fullpath[PATH_MAX];
 
-#ifdef linux
-    if(!_fopen) {
-        _fopen = dlsym( RTLD_NEXT, "fopen" );
-        if(!_fopen) {
-            fprintf(stderr, "httpcacheopen: fopen(): Init failed\n");
-            exit(1);
-        }
-    }
+        if(get_full_path(fullpath, filename) == -1) {
+#ifdef DEBUG
+            perror("httpcacheopen: fopen: get_full_path failed");
 #endif
+            return NULL;
+        }
+
+        return _fopen(fullpath, mode);
+    }
 
     return _fopen(filename, mode);
 }
@@ -562,50 +278,59 @@ FILE *fopen64(const char *filename, const char *mode) {
     }
 
     /* The only readonly-mode is r and rb */
-    if(strncmp(mode,"r+", 2) && strncmp(mode,"rb+", 3) && 
+    if(strncmp(mode,"r+", 2) && strncmp(mode,"rb+", 3) &&
             !strncmp(mode, "r", 1)) 
     {
-        int fd = open64(filename, O_RDONLY);
+        int fd;
+
+        fd = open64(filename, O_RDONLY);
         if(fd == -1) {
             return NULL;
         }
         return fdopen(fd, mode);
     }
 
+    GET_REAL_SYMBOL(fopen64);
+    if(chrootdir) {
+        char fullpath[PATH_MAX];
 
-#ifdef linux
-    if(!_fopen64) {
-        _fopen64 = dlsym( RTLD_NEXT, "fopen64" );
-        if(!_fopen64) {
-            fprintf(stderr, "httpcacheopen: fopen64(): Init failed\n");
-            exit(1);
-        }
-    }
+        if(get_full_path(fullpath, filename) == -1) {
+#ifdef DEBUG
+            perror("httpcacheopen: fopen64: get_full_path failed");
 #endif
+            return NULL;
+        }
+
+        return _fopen64(fullpath, mode);
+    }
 
     return _fopen64(filename, mode);
 }
 
+
 int chdir(const char *path) {
+    char fullpath[PATH_MAX];
     int rc;
 
-#ifdef linux
-    if(!_chdir) {
-        _chdir = dlsym( RTLD_NEXT, "chdir" );
-        if(!_chdir) {
-            fprintf(stderr, "httpcacheopen: chdir(): Init failed\n");
-            exit(1);
-        }
-    }
-#endif
+    GET_REAL_SYMBOL(chdir);
 
-    rc = _chdir(path);
+    if(get_full_path(fullpath, path) == -1) {
+#ifdef DEBUG
+        perror("httpcacheopen: chdir: get_full_path failed");
+#endif
+        return -1;
+    }
+
+    rc = _chdir(fullpath);
     if(rc == -1) {
-        return(-1);
+        return -1;
     }
 
     if(!cachedwd) {
         cachedwd = malloc(PATH_MAX*2);
+        if(cachedwd == NULL) {
+            return -1;
+        }
         cachedwd[0] = '\0';
     }
 
@@ -627,3 +352,232 @@ int chdir(const char *path) {
 
     return(rc);
 }
+
+
+char *getcwd(char *buffer, size_t size) {
+    size_t cwdlen;
+
+    /* Check if we have cached the working directory, if not do it the
+       lazy way by calling our chdir that caches it :) */
+    if(!cachedwd) {
+        char mycwd[PATH_MAX];
+
+        GET_REAL_SYMBOL(getcwd);
+        if(_getcwd(mycwd, PATH_MAX) == NULL) {
+            return NULL;
+        }
+        if(chdir(mycwd) == -1) {
+            return NULL;
+        }
+    }
+
+    cwdlen = strlen(cachedwd) + 1;
+
+    if(!(buffer == NULL && size == 0) && cwdlen > size) {
+        errno = ERANGE;
+        return NULL;
+    }
+
+    /* Handle linux extension of allocating when buffer == NULL */
+    if(buffer == NULL) {
+        if(size == 0) {
+            size = cwdlen;
+        }
+        buffer = malloc(size);
+        if(buffer == NULL) {
+            return NULL;
+        }
+    }
+    strcpy(buffer, cachedwd);
+
+#ifdef DEBUG
+    fprintf(stderr, "httpcacheopen: getcwd: %s\n", buffer);
+#endif
+
+    return buffer;
+}
+
+
+/* We emulate chroot in order to support FTP daemons and other thingies that
+   implements a virtual root by doing chroot. */
+int chroot(const char *path) {
+    struct stat64 st;
+    char newdir[PATH_MAX];
+
+    if(!chrootdir) {
+        chrootdir = malloc(PATH_MAX);
+        if(chrootdir == NULL) {
+            return -1;
+        }
+        chrootdir[0] = '\0';
+    }
+
+    if(get_full_path(newdir, path) == -1) {
+        return(-1);
+    }
+
+#ifdef DEBUG
+    fprintf(stderr, "httpcacheopen: chroot: newdir=%s\n", newdir);
+#endif
+
+    /* Do (very) basic checks */
+    GET_REAL_SYMBOL(stat64);
+    if((_stat64(newdir, &st)) == -1) {
+        /* Failure, when your best just isn't good enough */
+#ifdef DEBUG
+        perror("httpcacheopen: chroot: stat");
+#endif
+        return(-1);
+    }
+    if(!S_ISDIR(st.st_mode)) {
+        errno = ENOTDIR;
+#ifdef DEBUG
+        perror("httpcacheopen: chroot");
+#endif
+        return(-1);
+    }
+
+    /* Success, set the new chrootdir and go! */
+    strcpy(chrootdir, newdir);
+
+#ifdef DEBUG
+    fprintf(stderr, "httpcacheopen: chroot: chrootdir=%s\n", chrootdir);
+#endif
+
+    return(0);
+}
+
+
+int stat(const char *path, struct stat *buffer) {
+    char realpath[PATH_MAX];
+
+    GET_REAL_SYMBOL(stat);
+
+    /* Do it the quick way if not chroot */
+    if(chrootdir == NULL) {
+        return _stat(path, buffer);
+    }
+
+    if(strlen(path) +1 > PATH_MAX) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+
+    if(get_full_path(realpath, path) == -1) {
+        return -1;
+    }
+
+    return _stat(realpath, buffer);
+}
+
+
+int stat64(const char *path, struct stat64 *buffer) {
+    char realpath[PATH_MAX];
+
+    GET_REAL_SYMBOL(stat64);
+
+    /* Do it the quick way if not chroot */
+    if(chrootdir == NULL) {
+        return _stat64(path, buffer);
+    }
+
+    if(strlen(path) +1 > PATH_MAX) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+
+    if(get_full_path(realpath, path) == -1) {
+        return -1;
+    }
+
+    return _stat64(realpath, buffer);
+}
+
+
+int lstat(const char *path, struct stat *buffer) {
+    char realpath[PATH_MAX];
+
+    GET_REAL_SYMBOL(lstat);
+
+    /* Do it the quick way if not chroot */
+    if(chrootdir == NULL) {
+        return _lstat(path, buffer);
+    }
+
+    if(strlen(path) +1 > PATH_MAX) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+
+    if(get_full_path(realpath, path) == -1) {
+        return -1;
+    }
+
+    return _lstat(realpath, buffer);
+}
+
+
+int lstat64(const char *path, struct stat64 *buffer) {
+    char realpath[PATH_MAX];
+
+    GET_REAL_SYMBOL(lstat64);
+
+    /* Do it the quick way if not chroot */
+    if(chrootdir == NULL) {
+        return _lstat64(path, buffer);
+    }
+
+    if(strlen(path) +1 > PATH_MAX) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+
+    if(get_full_path(realpath, path) == -1) {
+        return -1;
+    }
+
+    return _lstat64(realpath, buffer);
+}
+
+
+int readlink(const char *path, char *buffer, size_t buffersize) {
+    char realpath[PATH_MAX];
+
+    GET_REAL_SYMBOL(readlink);
+
+    /* Do it the quick way if not chroot */
+    if(chrootdir == NULL) {
+        return _readlink(path, buffer, buffersize);
+    }
+
+    if(strlen(path) +1 > PATH_MAX) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+
+    if(get_full_path(realpath, path) == -1) {
+        return -1;
+    }
+
+    return _readlink(path, buffer, buffersize);
+}
+
+
+/* Stuff som behöver lagas om man ska chroot-emulera:
+   chroot - lagra virtuella roten
+   open*, fopen*, stat*, lstat*, chdir, getcwd, readlink: prepend:a virtuella roten
+   access, accessx: behövs?
+   pathconf: behövs??
+   rename, unlink, mkdir, symlink, link, *chown, chmod - behövs bara fixas vid rw-access?
+   popen?
+
+done:
+chroot, chdir, getcwd
+open, open64, fopen, fopen64
+stat, stat64, lstat, lstat64, readlink
+
+*/
+
+/* chrootdir == vart vi har chroot:at
+   cachedwd  == cwd (utan chroot-biten)
+   */
