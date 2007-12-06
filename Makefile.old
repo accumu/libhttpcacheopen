@@ -1,4 +1,4 @@
-# $Id: Makefile,v 1.4 2006/11/24 12:58:04 source Exp source $
+# $Id: Makefile,v 1.5 2006/11/26 13:04:40 source Exp source $
 CC = gcc
 CFLAGS = -g -W -Wall -O -fPIC -shared
 LDFLAGS = -nostdlib -shared
@@ -6,11 +6,11 @@ LIBS = -lgcc -lc -ldl
 
 all: libhttpcacheopen.so libhttpcacheopen.debug.so
 
-libhttpcacheopen.so: httpcacheopen.c md5.c cleanpath.c Makefile
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(LIBS) httpcacheopen.c
+libhttpcacheopen.so: wrapper.c md5.c cleanpath.c Makefile
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(LIBS) wrapper.c
 
-libhttpcacheopen.debug.so: httpcacheopen.c md5.c cleanpath.c Makefile
-	$(CC) -DDEBUG $(CFLAGS) $(LDFLAGS) -o $@ $(LIBS) httpcacheopen.c
+libhttpcacheopen.debug.so: wrapper.c md5.c cleanpath.c Makefile
+	$(CC) -DDEBUG $(CFLAGS) $(LDFLAGS) -o $@ $(LIBS) wrapper.c
 
 clean:
 	rm -f libhttpcacheopen.debug.so libhttpcacheopen.so libhttpcacheopen.debug.so
