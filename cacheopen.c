@@ -1,6 +1,16 @@
 
 static const char cacheopenrcsid[] = /*Add RCS version string to binary */
-        "$Id$";
+        "$Id: cacheopen.c,v 1.1 2007/12/06 15:28:10 source Exp source $";
+
+#include <sys/types.h>
+#include <utime.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <errno.h>
+#include <signal.h>
+#include <stdio.h>
+#include <string.h>
+
 
 #include "md5.c"
 
@@ -112,7 +122,7 @@ static int open_new_file(char *destfile,
                     continue;
                 }
                 else {
-                    return(-1);
+                    return COPY_FAIL;
                 }
             }
 
@@ -124,40 +134,39 @@ static int open_new_file(char *destfile,
                         continue;
                     }
                     else {
-                        return(-1);
+                        return COPY_FAIL;
                     }
                 }
 
             }
             else {
                 /* Someone else beat us to this */
-                return(COPY_EXISTS);
+                return COPY_EXISTS;
             }
         }
         else if(errno == ENOENT) {
             /* Directory missing, create and try again */
             if((mkdir_structure(destfile)) == -1) {
-                return(-1);
+                return COPY_FAIL;
             }
         }
         else {
-            return(-1);
+            return COPY_FAIL;
         }
     }
 
     errno = EFAULT;
-    return(-1);
+    return COPY_FAIL;
 }
 
-static copy_status copy_file(int srcfd, off64_t len, time_t mtime, 
-                             char *destfile,
+static copy_status copy_file(int srcfd, int srcflags, off64_t len, 
+                             time_t mtime, char *destfile,
                              int (*openfunc)(const char *, int, ...),
                              int (*statfunc)(const char *, struct stat64 *))
 {
-    int                 destfd, srcflags, modflags;
+    int                 destfd, modflags;
     char                *buf;
     ssize_t             amt, wrt, done;
-    struct utimbuf      ut;
     copy_status         rc = COPY_OK;
 
     destfd = open_new_file(destfile, openfunc, statfunc);
@@ -170,15 +179,10 @@ static copy_status copy_file(int srcfd, off64_t len, time_t mtime,
         return(COPY_FAIL);
     }
 
-    /* Remove nonblocking IO if present... */
-    srcflags = modflags = fcntl(srcfd, F_GETFL);
-#ifdef DEBUG
-    if(srcflags == -1) {
-        perror("fcntl");
-    }
-#endif
-    if( srcflags != -1 && (srcflags & O_NONBLOCK || !(srcflags & O_DIRECT)) ) {
-        modflags = srcflags & ~O_NONBLOCK;
+    /* Remove nonblocking IO, enable direct IO */
+    modflags = srcflags;
+    if(srcflags & O_NONBLOCK || !(srcflags & O_DIRECT) ) {
+        modflags &= ~O_NONBLOCK;
         modflags |= O_DIRECT;
         if((fcntl(srcfd, F_SETFL, modflags)) == -1) {
 #ifdef DEBUG
@@ -248,6 +252,7 @@ exit:
         rc = COPY_FAIL;
     }
     else {
+        struct utimbuf      ut;
         /* Set mtime on file to same as source */
         ut.actime = time(NULL);
         ut.modtime = mtime;
@@ -264,29 +269,26 @@ exit:
 }
 
 
-/* On success, fills in cachest */
-static int cacheopen(struct stat64 *cachest, int realfd, struct stat64 *realst, 
-                     const char *realpath, int oflag,
-                     int (*openfunc)(const char *, int, ...),
-                     int (*statfunc)(const char *, struct stat64 *))
-{
-    unsigned long long  inode, device;
-    int                 cachefd;
-    char                devinostr[34];
-    char                cachepath[PATH_MAX];
+static int cacheopen_check(const char *path) {
 
-    if(strncmp(realpath, backend_root, backend_len)) {
+    if(strncmp(path, backend_root, backend_len)) {
         /* Not a backend file, ignore */
 #ifdef DEBUG
-        fprintf(stderr, "cacheopen: Not a backend file: %s\n", realpath);
+        fprintf(stderr, "cacheopen: Not a backend file: %s\n", path);
 #endif
         return -1;
     }
 
-    /* Only cache regular files larger than 0 bytes */
-    if(!S_ISREG(realst->st_mode) || realst->st_size == 0) {
-        return -1;
-    }
+    return 0;
+}
+
+
+/* Given realst, constructs cachepath. cachepath is assumed to be
+   large enough */
+static void cacheopen_prepare(struct stat64 *realst, char *cachepath) 
+{
+    unsigned long long  inode, device;
+    char                devinostr[34];
 
     /* Hash on device:inode to eliminate file duplication. Since we only
        can serve plain files we don't have to bother with all the special
@@ -299,35 +301,43 @@ static int cacheopen(struct stat64 *cachest, int realfd, struct stat64 *realst,
     strcpy(cachepath, cache_root);
     cache_hash(devinostr, cachepath+cache_len, DIRLEVELS, DIRLENGTH);
     strcat(cachepath, CACHE_BODY_SUFFIX);
+}
+
+
+typedef enum cacheopen_status {
+    CACHEOPEN_FAIL = -1,
+    CACHEOPEN_DECLINED = -2,
+    CACHEOPEN_STALE = -3
+} cacheopen_status;
+
+
+/* On success, fills in cachest */
+static int cacheopen(struct stat64 *cachest, struct stat64 *realst, 
+                     int oflag, char *cachepath,
+                     int (*openfunc)(const char *, int, ...))
+{
+    int                 cachefd;
+
+    /* Only cache regular files larger than 0 bytes */
+    if(!S_ISREG(realst->st_mode) || realst->st_size == 0) {
+        return CACHEOPEN_DECLINED;
+    }
 
     cachefd = openfunc(cachepath, oflag);
     if(cachefd == -1) {
-        if((copy_file(realfd, realst->st_size, realst->st_mtime, cachepath, 
-                      openfunc, statfunc)) == -1) 
-        {
 #ifdef DEBUG
-            perror("cacheopen: copy_file failed");
+        perror("cacheopen: Unable to open cachepath");
 #endif
-            return -1;
-        }
-        /* We have either copied the file, or another process is already
-         * caching the file and we need to wait for it to finish */
-        cachefd = openfunc(cachepath, oflag);
-        if(cachefd == -1) {
-#ifdef DEBUG
-            perror("cacheopen: open cachefd after copy_file 1");
-#endif
-            return -1;
-        }
+        return CACHEOPEN_FAIL;
     }
 
     if(fstat64(cachefd, cachest) == -1) {
 #ifdef DEBUG
         perror("cacheopen: Unable to fstat cachefd");
 #endif
-        /* Oh well, fallback to use the real file */
+        /* Shouldn't fail, really... */
         close(cachefd);
-        return -1;
+        return CACHEOPEN_FAIL;
     }
 
     if(realst->st_mtime > cachest->st_mtime ||
@@ -336,28 +346,10 @@ static int cacheopen(struct stat64 *cachest, int realfd, struct stat64 *realst,
     {
         /* Bollocks, the cached file is stale */
         close(cachefd);
-        if((copy_file(realfd, realst->st_size, realst->st_mtime, cachepath,
-                      openfunc, statfunc)) == -1) 
-        {
 #ifdef DEBUG
-            perror("cacheopen: copy_file failed 2");
+        fprintf(stderr, "cacheopen: cached file stale\n");
 #endif
-            return -1;
-        }
-        cachefd = openfunc(cachepath, oflag);
-        if(cachefd == -1) {
-#ifdef DEBUG
-            perror("cacheopen: open cachefd after copy_file 2");
-#endif
-            return -1;
-        }
-        if(fstat64(cachefd, cachest) == -1) {
-#ifdef DEBUG
-            perror("cacheopen: Unable to fstat cachefd 2");
-#endif
-            close(cachefd);
-            return -1;
-        }
+        return CACHEOPEN_STALE;
     }
 
 #ifdef DEBUG
@@ -369,3 +361,111 @@ static int cacheopen(struct stat64 *cachest, int realfd, struct stat64 *realst,
 }
 
 
+#ifdef USE_COPYD
+static int copyd_file(char *file) {
+    struct sockaddr_un sa;
+    int sock, rc;
+    socklen_t salen;
+    struct sigaction oldsig;
+    char buf[10]; /* Should only get "OK\0" or "FAIL\0" */
+    size_t amt;
+
+#ifdef DEBUG
+    fprintf(stderr, "copyd_file: file=%s\n", file);
+#endif
+
+    if(sigaction(SIGPIPE, NULL, &oldsig) == -1) {
+#ifdef DEBUG
+        perror("copyd_file: sigaction get");
+#endif
+        return -1;
+    }
+
+    if(oldsig.sa_flags & SA_SIGINFO || oldsig.sa_handler != SIG_IGN) {
+        struct sigaction newsig;
+
+        /* Ignore those pesky SIGPIPE:s */
+        newsig.sa_handler = SIG_IGN;
+        newsig.sa_sigaction = NULL;
+        sigemptyset(&newsig.sa_mask);
+        newsig.sa_flags = 0;
+        if(sigaction(SIGPIPE, &newsig, &oldsig) == -1) {
+#ifdef DEBUG
+            perror("copyd_file: sigaction set");
+#endif
+            return -1;
+        }
+    }
+
+    sock = socket(AF_UNIX, SOCK_STREAM, 0);
+    if(sock == -1) {
+#ifdef DEBUG
+        perror("copyd_file: socket");
+#endif
+        rc = -1;
+        goto err;
+    }
+
+    sa.sun_family = AF_UNIX;
+    strcpy(sa.sun_path, SOCKPATH);
+
+    if(connect(sock, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
+#ifdef DEBUG
+        perror("copyd_file: connect");
+#endif
+        rc = -1;
+        goto err;
+    }
+
+    amt = strlen(file)+1;
+    rc=write(sock, file, amt);
+    if(rc != amt) {
+#ifdef DEBUG
+        perror("copyd_file: write");
+#endif
+        goto err;
+    }
+
+#ifdef DEBUG
+    fprintf(stderr, "copyd_file: wrote '%s' rc=%d\n", file, rc);
+#endif
+
+    rc = read(sock, buf, sizeof(buf));
+    if(rc == -1) {
+#ifdef DEBUG
+        perror("copyd_file: read");
+#endif
+        goto err;
+    }
+    else if(rc < 1) {
+#ifdef DEBUG
+        fprintf(stderr, "copyd_file: short read\n");
+#endif
+        rc = -1;
+        goto err;
+    }
+    buf[rc-1] = '\0';
+
+#ifdef DEBUG
+    fprintf(stderr, "copyd_file: read '%s' rc=%d\n", buf, rc);
+#endif
+
+    if(!strcmp(buf, "OK")) {
+        rc = 0;
+    }
+    else {
+        rc = -1;
+    }
+
+err:
+    if(oldsig.sa_flags & SA_SIGINFO || oldsig.sa_handler != SIG_IGN) {
+        if(sigaction(SIGPIPE, &oldsig, NULL) == -1) {
+#ifdef DEBUG
+            perror("copyd_file: restore sigaction");
+#endif
+        }
+    }
+
+    return rc;
+}
+#endif /* USE_COPYD */
