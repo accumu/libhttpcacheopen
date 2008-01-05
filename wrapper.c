@@ -25,7 +25,7 @@
 #include "cacheopen.c"
 
 static const char rcsid[] = /*Add RCS version string to binary */
-        "$Id: httpcacheopen.c,v 1.7 2007/04/26 10:40:29 source Exp source $";
+        "$Id: wrapper.c,v 1.8 2007/12/06 15:27:53 source Exp source $";
 
 
 /* Declarations for the real functions that we override */
@@ -40,9 +40,20 @@ static int (*_lstat)(const char *, struct stat *);
 static int (*_lstat64)(const char *, struct stat64 *);
 static int (*_readlink)(const char *, char *, size_t);
 
+/* The issue of which types can hold function pointers is messy. xlc complains
+   on mismatch between void * and actual type of function without a cast,
+   gcc dies on invalid lvalue assignment with cast ... */
+
+#ifdef _AIX
+#define DLSYM_RETURN_CAST (void)
+#endif
+#ifndef DLSYM_RETURN_CAST
+#define DLSYM_RETURN_CAST ;
+#endif
+
 #define GET_REAL_SYMBOL(a) \
 if(! _##a) { \
-    (void *) _##a = dlsym( RTLD_NEXT, #a ); \
+    DLSYM_RETURN_CAST _##a = dlsym( RTLD_NEXT, #a ); \
     if(!_##a) { \
         perror("httpcacheopen: " #a "(): Init failed"); \
         exit(1); \
@@ -110,8 +121,8 @@ int open(const char *path, int oflag, /* mode_t mode */...) {
     int                 realfd, cachefd;
     mode_t              mode;
     struct stat64       realst, cachest;
-    struct timespec     delay;
-    char                realpath[PATH_MAX];
+    char                realpath[PATH_MAX], cachepath[PATH_MAX];
+    time_t              starttime=0;
 
 
     if(!path) {
@@ -146,6 +157,13 @@ int open(const char *path, int oflag, /* mode_t mode */...) {
         realfd = _open(realpath, oflag);
     }
 
+    if(cacheopen_check(realpath) == -1) {
+#ifdef DEBUG
+        fprintf(stderr, "open: cacheopen_check failed\n");
+#endif
+        return(realfd);
+    }
+
     if(realfd == -1 || oflag & (O_WRONLY | O_RDWR)) {
 #ifdef DEBUG
         if(realfd == -1) {
@@ -166,43 +184,87 @@ int open(const char *path, int oflag, /* mode_t mode */...) {
         return -1;
     }
 
-    if(realst.st_size > MAX_COPY_SIZE) {
-#ifdef DEBUG
-        fprintf(stderr, "open: Filesize over copy sizelimit\n");
-#endif
-        return(realfd);
-    }
-
     /* If we get here, there are possibillities to use a cached copy of the
        file in the httpcache instead */
 
+    cacheopen_prepare(&realst, cachepath);
+
     GET_REAL_SYMBOL(stat64);
-    cachefd = cacheopen(&cachest, realfd, &realst, realpath, oflag, _open, _stat64);
-    if(cachefd == -1) {
-        return(realfd);
+    cachefd = cacheopen(&cachest, &realst, oflag, cachepath, _open);
+
+    if(cachefd == CACHEOPEN_FAIL || cachefd == CACHEOPEN_STALE) {
+        /* Either no cached file or stale cached file, initiate
+           file copy once */
+        if(realst.st_size > MAX_COPY_SIZE) {
+#ifdef DEBUG
+            fprintf(stderr, "open: Filesize over copy sizelimit\n");
+#endif
+
+#ifdef USE_COPYD
+            if(copyd_file(realpath) == -1) {
+#ifdef DEBUG
+                fprintf(stderr, "open: copyd_file failed\n");
+#endif
+                return realfd;
+            }
+#else /* USE_COPYD */
+            return realfd;
+#endif /* USE_COPYD */
+        }
+        else if(copy_file(realfd, oflag, realst.st_size, realst.st_mtime,
+                          cachepath, _open, _stat64) == COPY_FAIL)
+        {
+#ifdef DEBUG
+            perror("open: copy_file COPY_FAIL");
+#endif
+            return realfd;
+        }
+        cachefd = cacheopen(&cachest, &realst, oflag, cachepath, _open);
     }
 
-    /* cacheopen() fills in cachest for us */
-    while(realst.st_size != cachest.st_size) {
-        if(cachest.st_mtime < time(NULL) - CACHE_UPDATE_TIMEOUT) {
-#ifdef DEBUG
-            fprintf(stderr, 
-                    "open: Timed out waiting for cached file\n");
-#endif
-            /* Caching timed out */
-            close(cachefd);
-            return(realfd);
+    /* Loop until we've got either a file with contents or a timeout */
+    while(1) {
+        if(cachefd == CACHEOPEN_DECLINED) {
+            return realfd;
         }
-        delay.tv_sec = 0;
-        delay.tv_nsec = CACHE_LOOP_SLEEP*1000000;
-        nanosleep(&delay, NULL);
-        if(fstat64(cachefd, &cachest) == -1) {
-#ifdef DEBUG
-            perror("open: Unable to fstat cachefd 3");
-#endif
-            close(cachefd);
-            return(realfd);
+
+        if(cachefd < 0 && !starttime) {
+            starttime = time(NULL);
         }
+
+        /* cacheopen() fills in cachest for us */
+#ifdef USE_COPYD
+        if(cachefd < 0 || cachest.st_size == 0) {
+#else /* USE_COPYD */
+        if(cachefd < 0 || cachest.st_size != realst.st_size) {
+#endif /* USE_COPYD */
+            struct timespec     delay;
+            time_t timeout = time(NULL) - CACHE_UPDATE_TIMEOUT;
+
+            if(cachefd >= 0) {
+                close(cachefd);
+            }
+
+            if( (cachefd < 0 && starttime < timeout) ||
+                (cachefd >= 0 && cachest.st_mtime < timeout) )
+            {
+#ifdef DEBUG
+                fprintf(stderr, 
+                        "open: Timed out waiting for cached file\n");
+#endif
+                /* Caching timed out */
+                return realfd;
+            }
+            delay.tv_sec = 0;
+            delay.tv_nsec = CACHE_LOOP_SLEEP*1000000;
+            nanosleep(&delay, NULL);
+            /* And again! */
+            cachefd = cacheopen(&cachest, &realst, oflag, cachepath, _open);
+            continue;
+        }
+
+        /* We're done */
+        break;
     }
 
     /* Victory! */
