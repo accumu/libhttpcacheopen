@@ -20,12 +20,19 @@
 #include <stdio.h>
 #include <utime.h>
 
+/* Ugh. Solaris is being moronic by defining a wrapper function in header
+   files for non-LFS stat on 32bit. Ignore it for now, all our software
+   is only using the LFS interface anyway */
+#if defined(__sun) && !defined(_LP64)
+#define WRAPPER_STAT_NOWRAP
+#endif
+
 #include "config.h"
 #include "cleanpath.c"
 #include "cacheopen.c"
 
 static const char rcsid[] = /*Add RCS version string to binary */
-        "$Id: wrapper.c,v 1.8 2007/12/06 15:27:53 source Exp source $";
+        "$Id: wrapper.c,v 1.9 2008/01/05 20:34:30 source Exp source $";
 
 
 /* Declarations for the real functions that we override */
@@ -34,9 +41,13 @@ static FILE *(*_fopen)(const char *, const char *);
 static FILE *(*_fopen64)(const char *, const char *);
 static int (*_chdir)(const char *);
 static char *(*_getcwd)(char *, size_t);
+
+#ifndef WRAPPER_STAT_NOWRAP
 static int (*_stat)(const char *, struct stat *);
-static int (*_stat64)(const char *, struct stat64 *);
 static int (*_lstat)(const char *, struct stat *);
+#endif /* WRAPPER_STAT_NOWRAP */
+
+static int (*_stat64)(const char *, struct stat64 *);
 static int (*_lstat64)(const char *, struct stat64 *);
 static int (*_readlink)(const char *, char *, size_t);
 
@@ -510,6 +521,7 @@ int chroot(const char *path) {
 }
 
 
+#ifndef WRAPPER_STAT_NOWRAP
 int stat(const char *path, struct stat *buffer) {
     char realpath[PATH_MAX];
 
@@ -531,6 +543,7 @@ int stat(const char *path, struct stat *buffer) {
 
     return _stat(realpath, buffer);
 }
+#endif /* WRAPPER_STAT_NOWRAP */
 
 
 int stat64(const char *path, struct stat64 *buffer) {
@@ -556,6 +569,7 @@ int stat64(const char *path, struct stat64 *buffer) {
 }
 
 
+#ifndef WRAPPER_STAT_NOWRAP
 int lstat(const char *path, struct stat *buffer) {
     char realpath[PATH_MAX];
 
@@ -577,6 +591,7 @@ int lstat(const char *path, struct stat *buffer) {
 
     return _lstat(realpath, buffer);
 }
+#endif /* WRAPPER_STAT_NOWRAP */
 
 
 int lstat64(const char *path, struct stat64 *buffer) {

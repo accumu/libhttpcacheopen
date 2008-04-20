@@ -1,6 +1,6 @@
 
 static const char cacheopenrcsid[] = /*Add RCS version string to binary */
-        "$Id: cacheopen.c,v 1.1 2007/12/06 15:28:10 source Exp source $";
+        "$Id: cacheopen.c,v 1.2 2008/01/05 20:35:12 source Exp source $";
 
 #include <sys/types.h>
 #include <utime.h>
@@ -174,16 +174,25 @@ static copy_status copy_file(int srcfd, int srcflags, off64_t len,
         return(destfd);
     }
 
+#ifdef O_DIRECT
     if(posix_memalign((void **) &buf, 512, CPBUFSIZE)) {
+#else /* O_DIRECT */
+    if( (buf = malloc(CPBUFSIZE)) == NULL) {
+#endif /* O_DIRECT */
         close(destfd);
         return(COPY_FAIL);
     }
 
     /* Remove nonblocking IO, enable direct IO */
     modflags = srcflags;
-    if(srcflags & O_NONBLOCK || !(srcflags & O_DIRECT) ) {
-        modflags &= ~O_NONBLOCK;
+    if(srcflags & O_NONBLOCK
+#ifdef O_DIRECT
+            || !(srcflags & O_DIRECT) ) {
         modflags |= O_DIRECT;
+#else /* O_DIRECT */
+        ) {
+#endif
+        modflags &= ~O_NONBLOCK;
         if((fcntl(srcfd, F_SETFL, modflags)) == -1) {
 #ifdef DEBUG
             perror("httpcacheopen: copy_file: Failed changing fileflags");
