@@ -1,16 +1,22 @@
-# $Id: Makefile,v 1.7 2008/01/05 20:34:56 source Exp source $
+# $Id: Makefile,v 1.8 2008/04/20 10:31:32 source Exp source $
 CC = gcc
-CFLAGS = -std=c99 -g -W -Wall -O -fPIC -shared
-LDFLAGS = -nostdlib -shared
+CFLAGS = -std=c99 -g -W -Wall -O
+LIBFLAGS = -fPIC -shared -DUSE_COPYD -nostdlib -shared
+LDFLAGS = -lrt # for nanosleep on Solaris
+LDFLAGS := $(LDFLAGS) -lsocket # for socket stuff on Solaris
+LDFLAGS := $(LDFLAGS) -lsendfile # for sendfile*() on Solaris
 LIBS = -lgcc -lc -ldl
 
-all: libhttpcacheopen.so libhttpcacheopen.debug.so
+all: libhttpcacheopen.so libhttpcacheopen.debug.so httpcachecopyd
 
-libhttpcacheopen.so: wrapper.c md5.c cleanpath.c cacheopen.c Makefile
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(LIBS) wrapper.c
+libhttpcacheopen.so: wrapper.c md5.c cleanpath.c cacheopen.c config.h Makefile
+	$(CC) $(CFLAGS) $(LIBFLAGS) $(LDFLAGS) -o $@ $(LIBS) wrapper.c
 
-libhttpcacheopen.debug.so: wrapper.c md5.c cleanpath.c cacheopen.c Makefile
-	$(CC) -DDEBUG $(CFLAGS) $(LDFLAGS) -o $@ $(LIBS) wrapper.c
+libhttpcacheopen.debug.so: wrapper.c md5.c cleanpath.c cacheopen.c config.h Makefile
+	$(CC) -DDEBUG $(CFLAGS) $(LIBFLAGS) $(LDFLAGS) -o $@ $(LIBS) wrapper.c
+
+httpcachecopyd: copyd.c cacheopen.c md5.c config.h Makefile
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ copyd.c
 
 clean:
-	rm -f libhttpcacheopen.debug.so libhttpcacheopen.so libhttpcacheopen.debug.so
+	rm -f libhttpcacheopen.debug.so libhttpcacheopen.so libhttpcacheopen.debug.so httpcachecopyd

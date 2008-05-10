@@ -1,5 +1,12 @@
 static const char rcsid[] = /*Add RCS version string to binary */
-        "$Id$";
+        "$Id: copyd.c,v 1.1 2008/01/05 20:35:40 source Exp source $";
+
+#define _GNU_SOURCE 1
+#define _XOPEN_SOURCE 600
+#define _ALL_SOURCE 1
+
+#define _LARGEFILE64_SOURCE 1
+#define _LARGE_FILE_API 1
 
 #include <pthread.h>
 #include <sys/types.h>
@@ -11,9 +18,19 @@ static const char rcsid[] = /*Add RCS version string to binary */
 #include <string.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <limits.h>
+#include <pwd.h>
 
 
 #include "config.h"
+
+#define IS_COPYD
+#ifdef USE_COPYD
+#error Source setup error - can't use and be copyd at the same time
+#endif
+
 #include "cleanpath.c"
 #include "cacheopen.c"
 
@@ -60,7 +77,11 @@ void *handle_conn(void * arg) {
         goto err;
     }
 
-    oflag = O_RDONLY | O_DIRECT;
+    oflag = O_RDONLY
+#ifdef O_DIRECT
+        | O_DIRECT
+#endif
+        ;
     realfd = open(buf, oflag);
     if(realfd == -1) {
         if(debug) {
@@ -78,7 +99,8 @@ void *handle_conn(void * arg) {
 
     cacheopen_prepare(&realst, cachepath);
 
-    cachefd = cacheopen(&cachest, &realst, oflag, cachepath, open);
+    cachefd = cacheopen(&cachest, &realst, oflag, cachepath, open, fstat64,
+                        close);
     if(cachefd == CACHEOPEN_DECLINED) {
         if(debug) {
             fprintf(stderr, "cacheopen DECLINED\n");
@@ -95,7 +117,7 @@ void *handle_conn(void * arg) {
     if(cachefd == CACHEOPEN_FAIL || cachefd == CACHEOPEN_STALE) {
         /* Either no cached file or stale cached file */
         copy_file(realfd, oflag, realst.st_size, realst.st_mtime, cachepath, 
-                  open, stat64);
+                  open, stat64, read, close);
     }
 
     goto ok;
@@ -121,6 +143,7 @@ int main(void) {
     int sock, rc;
     socklen_t salen;
     pthread_attr_t attr;
+    struct passwd *pw;
 
     signal(SIGPIPE, SIG_IGN);
     signal(SIGCLD, SIG_IGN);
@@ -143,6 +166,24 @@ int main(void) {
     /* Clean up old debris */
     unlink(SOCKPATH);
 
+    /* Change to the user we'll run as */
+    pw = getpwnam(COPYD_USER);
+    if(pw == NULL) {
+        fprintf(stderr, "copyd: No such COPYD_USER %s\n", COPYD_USER);
+        exit(4);
+    }
+
+    if(setregid(pw->pw_gid, pw->pw_gid) < 0) {
+        perror("setregid");
+        exit(5);
+    }
+
+    if(setreuid(pw->pw_uid, pw->pw_uid) < 0) {
+        perror("setreuid");
+        exit(6);
+    }
+
+    /* Create the socket and stuff */
     sock = socket(AF_UNIX, SOCK_STREAM, 0);
     if(sock == -1) {
         perror("copyd: socket");
@@ -177,7 +218,7 @@ int main(void) {
 
             if(pthread_create(&thr, &attr, handle_conn, (void *) rc) != 0) {
                 perror("pthread_create");
-                exit(4);
+                exit(25);
             }
         }
         else if (rc == -1 && (errno == EINTR || errno == ECONNABORTED || errno == ENOTCONN)) {
@@ -187,5 +228,5 @@ int main(void) {
     } while(rc != -1);
 
     perror("copyd: accept");
-    exit(5);
+    exit(99);
 }

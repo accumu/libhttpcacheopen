@@ -1,6 +1,6 @@
 
 static const char cacheopenrcsid[] = /*Add RCS version string to binary */
-        "$Id: cacheopen.c,v 1.2 2008/01/05 20:35:12 source Exp source $";
+        "$Id: cacheopen.c,v 1.3 2008/04/20 10:31:13 source Exp source $";
 
 #include <sys/types.h>
 #include <utime.h>
@@ -160,9 +160,11 @@ static int open_new_file(char *destfile,
 }
 
 static copy_status copy_file(int srcfd, int srcflags, off64_t len, 
-                             time_t mtime, char *destfile,
-                             int (*openfunc)(const char *, int, ...),
-                             int (*statfunc)(const char *, struct stat64 *))
+                         time_t mtime, char *destfile,
+                         int (*openfunc)(const char *, int, ...),
+                         int (*statfunc)(const char *, struct stat64 *),
+                         ssize_t (*readfunc)(int fd, void *buf, size_t count),
+                         int (*closefunc)(int fd))
 {
     int                 destfd, modflags;
     char                *buf;
@@ -179,7 +181,7 @@ static copy_status copy_file(int srcfd, int srcflags, off64_t len,
 #else /* O_DIRECT */
     if( (buf = malloc(CPBUFSIZE)) == NULL) {
 #endif /* O_DIRECT */
-        close(destfd);
+        closefunc(destfd);
         return(COPY_FAIL);
     }
 
@@ -207,7 +209,7 @@ static copy_status copy_file(int srcfd, int srcflags, off64_t len,
     }
 
     while(len > 0) {
-        amt = read(srcfd, buf, CPBUFSIZE);
+        amt = readfunc(srcfd, buf, CPBUFSIZE);
         if(amt == -1) {
             if(errno == EINTR) {
                 continue;
@@ -253,7 +255,7 @@ static copy_status copy_file(int srcfd, int srcflags, off64_t len,
 exit:
     free(buf);
 
-    if((close(destfd)) == -1) {
+    if((closefunc(destfd)) == -1) {
 #ifdef DEBUG
         perror("httpcacheopen: copy_file: close destfd");
 #endif
@@ -298,6 +300,7 @@ static void cacheopen_prepare(struct stat64 *realst, char *cachepath)
 {
     unsigned long long  inode, device;
     char                devinostr[34];
+    int                 len;
 
     /* Hash on device:inode to eliminate file duplication. Since we only
        can serve plain files we don't have to bother with all the special
@@ -306,9 +309,17 @@ static void cacheopen_prepare(struct stat64 *realst, char *cachepath)
     inode  = realst->st_ino;
     snprintf(devinostr, sizeof(devinostr), "%016llx:%016llx", device, inode);
 
-    /* Calculate cachepath */
-    strcpy(cachepath, cache_root);
-    cache_hash(devinostr, cachepath+cache_len, DIRLEVELS, DIRLENGTH);
+    /* Calculate cachepath. We simply put large files in a separate path
+       intended to separate the contention point for large and small files */
+    if(realst->st_size < CACHE_BF_SIZE) {
+        strcpy(cachepath, cache_root);
+        len = cache_len;
+    }
+    else {
+        strcpy(cachepath, bfcache_root);
+        len = bfcache_len;
+    }
+    cache_hash(devinostr, cachepath+len, DIRLEVELS, DIRLENGTH);
     strcat(cachepath, CACHE_BODY_SUFFIX);
 }
 
@@ -323,7 +334,9 @@ typedef enum cacheopen_status {
 /* On success, fills in cachest */
 static int cacheopen(struct stat64 *cachest, struct stat64 *realst, 
                      int oflag, char *cachepath,
-                     int (*openfunc)(const char *, int, ...))
+                     int (*openfunc)(const char *, int, ...),
+                     int (*fstat64func)(int filedes, struct stat64 *buf),
+                     int (*closefunc)(int fd))
 {
     int                 cachefd;
 
@@ -340,21 +353,22 @@ static int cacheopen(struct stat64 *cachest, struct stat64 *realst,
         return CACHEOPEN_FAIL;
     }
 
-    if(fstat64(cachefd, cachest) == -1) {
+    if(fstat64func(cachefd, cachest) == -1) {
 #ifdef DEBUG
         perror("cacheopen: Unable to fstat cachefd");
 #endif
         /* Shouldn't fail, really... */
-        close(cachefd);
+        closefunc(cachefd);
         return CACHEOPEN_FAIL;
     }
 
+    /* FIXME: Use ctime != mtime too */
     if(realst->st_mtime > cachest->st_mtime ||
             (realst->st_size != cachest->st_size && 
                cachest->st_mtime < time(NULL) - CACHE_UPDATE_TIMEOUT)) 
     {
         /* Bollocks, the cached file is stale */
-        close(cachefd);
+        closefunc(cachefd);
 #ifdef DEBUG
         fprintf(stderr, "cacheopen: cached file stale\n");
 #endif
@@ -371,13 +385,14 @@ static int cacheopen(struct stat64 *cachest, struct stat64 *realst,
 
 
 #ifdef USE_COPYD
-static int copyd_file(char *file) {
+static int copyd_file(char *file,
+                      ssize_t (*readfunc)(int fd, void *buf, size_t count)) 
+{
     struct sockaddr_un sa;
     int sock, rc;
-    socklen_t salen;
     struct sigaction oldsig;
     char buf[10]; /* Should only get "OK\0" or "FAIL\0" */
-    size_t amt;
+    ssize_t amt;
 
 #ifdef DEBUG
     fprintf(stderr, "copyd_file: file=%s\n", file);
@@ -439,7 +454,7 @@ static int copyd_file(char *file) {
     fprintf(stderr, "copyd_file: wrote '%s' rc=%d\n", file, rc);
 #endif
 
-    rc = read(sock, buf, sizeof(buf));
+    rc = readfunc(sock, buf, sizeof(buf));
     if(rc == -1) {
 #ifdef DEBUG
         perror("copyd_file: read");

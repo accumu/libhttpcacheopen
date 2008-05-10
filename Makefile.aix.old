@@ -1,27 +1,27 @@
-# $Id: Makefile.aix,v 1.5 2006/11/26 13:04:40 source Exp source $
+# $Id: Makefile.aix,v 1.1 2007/12/06 15:27:35 source Exp source $
 CC = xlc_r
 CFLAGS = -g -O2 -qstrict_induction $(EXTRACFLAGS)
 LDFLAGS = -brtl
 LIBCC = xlc
-LIBFLAGS = -bexpall -bM:SRE -bnoentry
+LIBFLAGS = -DUSE_COPYD -bexpall -bM:SRE -bnoentry
 LIBS =
 
 all: libhttpcacheopen.64.so libhttpcacheopen.debug.64.so libhttpcacheopen.32.so libhttpcacheopen.debug.32.so httpcachecopyd
 
-libhttpcacheopen.32.so: wrapper.c md5.c cleanpath.c Makefile.aix
+libhttpcacheopen.32.so: wrapper.c md5.c cleanpath.c cacheopen.c Makefile.aix
 	$(LIBCC) -q32 $(CFLAGS) $(LIBFLAGS) -o $@ $(LIBS) wrapper.c
 
-libhttpcacheopen.64.so: wrapper.c md5.c cleanpath.c Makefile.aix
+libhttpcacheopen.64.so: wrapper.c md5.c cleanpath.c cacheopen.c Makefile.aix
 	$(LIBCC) -q64 $(CFLAGS) $(LIBFLAGS) -o $@ $(LIBS) wrapper.c
 
-libhttpcacheopen.debug.32.so: wrapper.c md5.c cleanpath.c Makefile.aix
+libhttpcacheopen.debug.32.so: wrapper.c md5.c cleanpath.c cacheopen.c Makefile.aix
 	$(LIBCC) -q32 -DDEBUG $(CFLAGS) $(LIBFLAGS) -o $@ $(LIBS) wrapper.c
 
-libhttpcacheopen.debug.64.so: wrapper.c md5.c cleanpath.c Makefile.aix
+libhttpcacheopen.debug.64.so: wrapper.c md5.c cleanpath.c cacheopen.c Makefile.aix
 	$(LIBCC) -q64 -DDEBUG $(CFLAGS) $(LIBFLAGS) -o $@ $(LIBS) wrapper.c
 
-httpcachecopyd: copyd.o
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $?
+httpcachecopyd: copyd.c cacheopen.c md5.c config.h
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ copyd.c
 
 clean:
 	rm -f libhttpcacheopen.debug.*.so libhttpcacheopen.*.so
