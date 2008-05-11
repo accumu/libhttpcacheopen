@@ -1,4 +1,4 @@
-# $Id: Makefile,v 1.9 2008/05/10 11:11:01 source Exp $
+# $Id: Makefile,v 1.1 2008/05/11 08:45:01 source Exp source $
 uname := $(shell uname)
 
 LIBCFLAGS = -DUSE_COPYD
@@ -30,7 +30,7 @@ ifeq ($(uname),SunOS)
 	LDFLAGS := $(LDFLAGS) -lsendfile # for sendfile*()
 endif
 
-LIBDEPS := md5.c cleanpath.c cacheopen.c config.h Makefile.new
+LIBDEPS := md5.c cleanpath.c cacheopen.c config.h Makefile
 
 all: httpcachecopyd $(LIBOBJECTS)
 
@@ -59,4 +59,4 @@ libhttpcacheopen.debug.64.so: wrapper.c $(LIBDEPS)
 
 
 clean:
-	rm -f httpcachecopyd $(LIBOBJECTS)
+	rm -f httpcachecopyd libhttpcacheopen*.so
