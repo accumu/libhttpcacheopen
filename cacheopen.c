@@ -1,6 +1,6 @@
 
 static const char cacheopenrcsid[] = /*Add RCS version string to binary */
-        "$Id: cacheopen.c,v 1.3 2008/04/20 10:31:13 source Exp source $";
+        "$Id: cacheopen.c,v 1.4 2008/05/10 11:09:49 source Exp source $";
 
 #include <sys/types.h>
 #include <utime.h>
@@ -167,6 +167,7 @@ static copy_status copy_file(int srcfd, int srcflags, off64_t len,
                          int (*closefunc)(int fd))
 {
     int                 destfd, modflags;
+    void                *tmp;
     char                *buf;
     ssize_t             amt, wrt, done;
     copy_status         rc = COPY_OK;
@@ -177,10 +178,17 @@ static copy_status copy_file(int srcfd, int srcflags, off64_t len,
     }
 
 #ifdef O_DIRECT
-    if(posix_memalign((void **) &buf, 512, CPBUFSIZE)) {
+    /* C99 strict aliasing rules forces us to dance via a temporary pointer */
+    if(posix_memalign(&tmp, 512, CPBUFSIZE)) {
+        buf = NULL;
+    }
+    else {
+        buf = tmp;
+    }
 #else /* O_DIRECT */
-    if( (buf = malloc(CPBUFSIZE)) == NULL) {
+    buf = malloc(CPBUFSIZE);
 #endif /* O_DIRECT */
+    if(buf == NULL) {
         closefunc(destfd);
         return(COPY_FAIL);
     }
