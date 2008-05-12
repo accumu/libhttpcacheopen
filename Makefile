@@ -1,4 +1,4 @@
-# $Id: Makefile,v 1.1 2008/05/11 08:45:01 source Exp source $
+# $Id: Makefile,v 1.2 2008/05/11 09:00:34 source Exp source $
 uname := $(shell uname)
 
 LIBCFLAGS = -DUSE_COPYD
@@ -30,12 +30,15 @@ ifeq ($(uname),SunOS)
 	LDFLAGS := $(LDFLAGS) -lsendfile # for sendfile*()
 endif
 
-LIBDEPS := md5.c cleanpath.c cacheopen.c config.h Makefile
+BINOBJECTS := httpcachecopyd
+BINDEPS := md5.c cleanpath.c cacheopen.c config.h Makefile
 
-all: httpcachecopyd $(LIBOBJECTS)
+LIBDEPS := $(BINDEPS)
+
+all: $(BINOBJECTS) $(LIBOBJECTS) version
 
 # Targets
-httpcachecopyd: copyd.c cacheopen.c md5.c config.h Makefile
+$(BINOBJECTS): copyd.c $(BINDEPS)
 	$(CC) $(CFLAGS) $(BINCFLAGS) $(LDFLAGS) -o $@ copyd.c
 
 libhttpcacheopen.so: wrapper.c $(LIBDEPS)
@@ -57,6 +60,10 @@ libhttpcacheopen.64.so: wrapper.c $(LIBDEPS)
 libhttpcacheopen.debug.64.so: wrapper.c $(LIBDEPS)
 	$(LIBCC) -q64 -DDEBUG $(CFLAGS) $(LIBFLAGS) $(LDFLAGS) -o $@ $(LIBS) wrapper.c
 
+version: $(LIBOBJECTS) $(BINOBJECTS)
+	@echo ""
+	@echo libhttpcacheopen version $(shell ident $(LIBOBJECTS) $(BINOBJECTS) | awk '/Id:/ {print $$4}' | tr -d / | sort -rn | head -1) for $(uname) built successfully.
+
 
 clean:
-	rm -f httpcachecopyd libhttpcacheopen*.so
+	rm -f $(BINOBJECTS) libhttpcacheopen*.so
