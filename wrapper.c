@@ -43,7 +43,7 @@
 #include "cacheopen.c"
 
 static const char rcsid[] = /*Add RCS version string to binary */
-        "$Id: wrapper.c,v 1.10 2008/04/20 10:31:22 source Exp source $";
+        "$Id: wrapper.c,v 1.11 2008/05/10 11:09:49 source Exp source $";
 
 #ifdef USE_COPYD
 typedef struct cachefdinfo_t {
@@ -1295,29 +1295,23 @@ out:
 #endif /* _AIX */
 
 /* FIXME: 
-    - fget* is ignored for now.
+    Ignored for now, doesn't seem to be used by vsftpd/rsync:
+        - fget* 
+        - mmap*
+        - access, accessx
+        - pathconf
+        - popen
+    Ignored, only needed for rw-access:
+        - rename
+        - unlink
+        - mkdir
+        - symlink
+        - link
+        - *chown
+        - chmod
  */
 #endif /* USE_COPYD */
 
-
-/* Stuff som behöver lagas om man ska chroot-emulera:
-   chroot - lagra virtuella roten
-   open*, fopen*, stat*, lstat*, chdir, getcwd, readlink: prepend:a virtuella roten
-   access, accessx: behövs?
-   pathconf: behövs??
-   rename, unlink, mkdir, symlink, link, *chown, chmod - behövs bara fixas vid rw-access?
-   popen?
-
-done:
-chroot, chdir, getcwd
-open, open64, fopen, fopen64
-stat, stat64, lstat, lstat64, readlink
-
-*/
-
-/* chrootdir == vart vi har chroot:at
-   cachedwd  == cwd (utan chroot-biten)
-   */
 
 /*
 vim:ts=4:et:sw=4:
