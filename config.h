@@ -1,4 +1,4 @@
-/* $Id$ */
+/* $Id: config.h,v 1.1 2008/08/10 10:07:16 source Exp source $ */
 
 #ifndef _CACHE_CONFIG_H
 #define _CACHE_CONFIG_H
@@ -18,7 +18,7 @@
 
 #define COPYD_USER              "www-ftp"
 
-#define SOCKPATH                "/tmp/.cachecopyd.sock"
+#define SOCKPATH                "/var/run/.cachecopyd.sock"
 
 static const char backend_root[]    = "/export/ftp/";
 static const int  backend_len       = sizeof(backend_root)-1;
