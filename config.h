@@ -1,7 +1,8 @@
-/* $Id: config.h,v 1.1 2008/08/10 10:07:16 source Exp source $ */
-
 #ifndef _CACHE_CONFIG_H
 #define _CACHE_CONFIG_H
+
+static const char configrcsid[] = /*Add RCS version string of config */
+        "$Id$";
 
 #define CPBUFSIZE               262144
 #define CACHE_UPDATE_TIMEOUT    30      /* Note! In seconds! */
