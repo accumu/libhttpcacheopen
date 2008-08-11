@@ -1,5 +1,5 @@
 static const char rcsid[] = /*Add RCS version string to binary */
-        "$Id: copyd.c,v 1.1 2008/01/05 20:35:40 source Exp source $";
+        "$Id: copyd.c,v 1.2 2008/05/10 11:09:49 source Exp source $";
 
 #define _GNU_SOURCE 1
 #define _XOPEN_SOURCE 600
@@ -28,7 +28,7 @@ static const char rcsid[] = /*Add RCS version string to binary */
 
 #define IS_COPYD
 #ifdef USE_COPYD
-#error Source setup error - can't use and be copyd at the same time
+#error Source setup error - can not use and be copyd at the same time
 #endif
 
 #include "cleanpath.c"
