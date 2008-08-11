@@ -1,5 +1,5 @@
 static const char rcsid[] = /*Add RCS version string to binary */
-        "$Id: copyd.c,v 1.2 2008/05/10 11:09:49 source Exp source $";
+        "$Id: copyd.c,v 1.3 2008/08/11 22:59:18 source Exp source $";
 
 #define _GNU_SOURCE 1
 #define _XOPEN_SOURCE 600
@@ -166,23 +166,6 @@ int main(void) {
     /* Clean up old debris */
     unlink(SOCKPATH);
 
-    /* Change to the user we'll run as */
-    pw = getpwnam(COPYD_USER);
-    if(pw == NULL) {
-        fprintf(stderr, "copyd: No such COPYD_USER %s\n", COPYD_USER);
-        exit(4);
-    }
-
-    if(setregid(pw->pw_gid, pw->pw_gid) < 0) {
-        perror("setregid");
-        exit(5);
-    }
-
-    if(setreuid(pw->pw_uid, pw->pw_uid) < 0) {
-        perror("setreuid");
-        exit(6);
-    }
-
     /* Create the socket and stuff */
     sock = socket(AF_UNIX, SOCK_STREAM, 0);
     if(sock == -1) {
@@ -201,6 +184,34 @@ int main(void) {
     if(listen(sock, 1024) != 0) {
         perror("copyd: listen");
         exit(3);
+    }
+
+    /* Get UID/GID of user to run as */
+    pw = getpwnam(COPYD_USER);
+    if(pw == NULL) {
+        fprintf(stderr, "copyd: No such COPYD_USER %s\n", COPYD_USER);
+        exit(4);
+    }
+
+    /* Change owner of the socket to our running user */
+    if(chown(SOCKPATH, pw->pw_uid, pw->pw_gid) != 0) {
+        perror("chown " SOCKPATH);
+        exit(4);
+    }
+    if(chmod(SOCKPATH, 0600) != 0) {
+        perror("chmod " SOCKPATH);
+        exit(4);
+    }
+
+    /* Change to the user we'll run as */
+    if(setregid(pw->pw_gid, pw->pw_gid) < 0) {
+        perror("setregid");
+        exit(5);
+    }
+
+    if(setreuid(pw->pw_uid, pw->pw_uid) < 0) {
+        perror("setreuid");
+        exit(6);
     }
 
     if(debug) {
