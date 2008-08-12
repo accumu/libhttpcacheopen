@@ -43,7 +43,7 @@
 #include "cacheopen.c"
 
 static const char rcsid[] = /*Add RCS version string to binary */
-        "$Id: wrapper.c,v 1.11 2008/05/10 11:09:49 source Exp source $";
+        "$Id: wrapper.c,v 1.12 2008/08/10 12:10:22 source Exp source $";
 
 #ifdef USE_COPYD
 typedef struct cachefdinfo_t {
@@ -68,17 +68,32 @@ static int (*_lstat)(const char *, struct stat *);
 static int (*_fstat)(int, struct stat *);
 #endif /* WRAPPER_STAT_NOWRAP */
 
+static int (*_readlink)(const char *, char *, size_t);
+
+static int realstat64(const char *, struct stat64 *);
+
+#ifdef __linux
+/* Ugh. Linux uses inlined wrappers for *stat64, so we need to catch
+   __*xstat64 instead */
+static int (*___xstat64)(int, __const char *, struct stat64 *);
+static int (*___lxstat64)(int, __const char *, struct stat64 *);
+#else /* __linux */
 static int (*_stat64)(const char *, struct stat64 *);
 static int (*_lstat64)(const char *, struct stat64 *);
-static int (*_readlink)(const char *, char *, size_t);
+#endif /* __linux */
 
 #ifdef USE_COPYD
 static ssize_t (*_read)(int, void *, size_t);
 static int (*_close)(int);
 static size_t (*_fread)(void *, size_t, size_t, FILE *);
 static int (*_fclose)(FILE *fp);
-static int (*_fstat64)(int, struct stat64 *);
 static ssize_t (*_sendfile64)(int, int, off64_t *, size_t);
+#ifdef __linux
+static int (*___fxstat64)(int, int, struct stat64 *);
+#else /* __linux */
+static int (*_fstat64)(int, struct stat64 *);
+#endif /* __linux */
+static int realfstat64(int, struct stat64 *);
 #ifdef _AIX
 static ssize_t (*_send_file)(int *, struct sf_parms *, uint_t);
 #endif /* _AIX */
@@ -220,9 +235,7 @@ int open(const char *path, int oflag, /* mode_t mode */...) {
         return(realfd);
     }
 
-    GET_REAL_SYMBOL(fstat64);
-
-    if(_fstat64(realfd, &realst) == -1) {
+    if(realfstat64(realfd, &realst) == -1) {
 #ifdef DEBUG
             perror("Unable to fstat realfd");
 #endif
@@ -235,9 +248,8 @@ int open(const char *path, int oflag, /* mode_t mode */...) {
 
     cacheopen_prepare(&realst, cachepath);
 
-    GET_REAL_SYMBOL(stat64);
     GET_REAL_SYMBOL(close);
-    cachefd = cacheopen(&cachest, &realst, oflag, cachepath, _open, _fstat64,
+    cachefd = cacheopen(&cachest, &realst, oflag, cachepath, _open, realfstat64,
                         _close);
 
     if(cachefd == CACHEOPEN_FAIL || cachefd == CACHEOPEN_STALE) {
@@ -261,7 +273,7 @@ int open(const char *path, int oflag, /* mode_t mode */...) {
 #endif /* USE_COPYD */
         }
         else if(copy_file(realfd, oflag, realst.st_size, realst.st_mtime,
-                          cachepath, _open, _stat64, _read, _close) 
+                          cachepath, _open, realstat64, _read, _close) 
                 == COPY_FAIL)
         {
 #ifdef DEBUG
@@ -270,7 +282,7 @@ int open(const char *path, int oflag, /* mode_t mode */...) {
             return realfd;
         }
         cachefd = cacheopen(&cachest, &realst, oflag, cachepath, _open, 
-                            _fstat64, _close);
+                            realfstat64, _close);
     }
 
     /* Loop until we've got either a file with contents or a timeout */
@@ -311,7 +323,7 @@ int open(const char *path, int oflag, /* mode_t mode */...) {
             nanosleep(&delay, NULL);
             /* And again! */
             cachefd = cacheopen(&cachest, &realst, oflag, cachepath, _open,
-                                _fstat64, _close);
+                                realfstat64, _close);
             continue;
         }
 
@@ -555,8 +567,7 @@ int chroot(const char *path) {
 #endif
 
     /* Do (very) basic checks */
-    GET_REAL_SYMBOL(stat64);
-    if((_stat64(newdir, &st)) == -1) {
+    if((realstat64(newdir, &st)) == -1) {
         /* Failure, when your best just isn't good enough */
 #ifdef DEBUG
         perror("httpcacheopen: chroot: stat");
@@ -615,14 +626,21 @@ int stat(const char *path, struct stat *buffer) {
 #endif /* WRAPPER_STAT_NOWRAP */
 
 
-int stat64(const char *path, struct stat64 *buffer) {
+#ifdef __linux
+/* Ugh. Linux uses inlined wrappers for *stat64, so we need to catch
+   __*xstat64 instead. Code duplication for the win */
+int __xstat64 (int __ver, __const char *path, struct stat64 *buffer) {
     char realpath[PATH_MAX];
 
-    GET_REAL_SYMBOL(stat64);
+    /* Check for ABI mismatch */
+    if(__ver != _STAT_VER) {
+        fprintf(stderr, "httpcacheopen: __xstat64(): stat version mismatch\n");
+        exit(2);
+    }
 
     /* Do it the quick way if not chroot */
     if(chrootdir == NULL) {
-        return _stat64(path, buffer);
+        return realstat64(path, buffer);
     }
 
     if(strlen(path) +1 > PATH_MAX) {
@@ -634,8 +652,97 @@ int stat64(const char *path, struct stat64 *buffer) {
         return -1;
     }
 
-    return _stat64(realpath, buffer);
+    return realstat64(realpath, buffer);
 }
+
+
+/* Provide a wrapper for the rest of our code */
+static int realstat64(const char *path, struct stat64 *buffer) {
+    GET_REAL_SYMBOL(__xstat64);
+    return ___xstat64 (_STAT_VER, path, buffer);
+}
+
+
+int __lxstat64 (int __ver, __const char *path, struct stat64 *buffer) {
+    char realpath[PATH_MAX];
+
+    GET_REAL_SYMBOL(__lxstat64);
+
+    /* Do it the quick way if not chroot */
+    if(chrootdir == NULL) {
+        return ___lxstat64(__ver, path, buffer);
+    }
+
+    /* Check for ABI mismatch */
+    if(__ver != _STAT_VER) {
+        fprintf(stderr, "httpcacheopen: __lxstat64(): stat version mismatch\n");
+        exit(2);
+    }
+
+    if(strlen(path) +1 > PATH_MAX) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+
+    if(get_full_path(realpath, path) == -1) {
+        return -1;
+    }
+
+    return ___lxstat64(__ver, realpath, buffer);
+}
+
+#else /* __linux */
+
+int stat64(const char *path, struct stat64 *buffer) {
+    char realpath[PATH_MAX];
+
+    /* Do it the quick way if not chroot */
+    if(chrootdir == NULL) {
+        return realstat64(path, buffer);
+    }
+
+    if(strlen(path) +1 > PATH_MAX) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+
+    if(get_full_path(realpath, path) == -1) {
+        return -1;
+    }
+
+    return realstat64(realpath, buffer);
+}
+
+
+/* Provide a wrapper for the rest of our code */
+static int realstat64(const char *path, struct stat64 *buffer) {
+    GET_REAL_SYMBOL(stat64);
+    return _stat64(path, buffer);
+}
+
+
+int lstat64(const char *path, struct stat64 *buffer) {
+    char realpath[PATH_MAX];
+
+    GET_REAL_SYMBOL(lstat64);
+
+    /* Do it the quick way if not chroot */
+    if(chrootdir == NULL) {
+        return _lstat64(path, buffer);
+    }
+
+    if(strlen(path) +1 > PATH_MAX) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+
+    if(get_full_path(realpath, path) == -1) {
+        return -1;
+    }
+
+    return _lstat64(realpath, buffer);
+}
+#endif /* __linux */
 
 
 #ifndef WRAPPER_STAT_NOWRAP
@@ -661,29 +768,6 @@ int lstat(const char *path, struct stat *buffer) {
     return _lstat(realpath, buffer);
 }
 #endif /* WRAPPER_STAT_NOWRAP */
-
-
-int lstat64(const char *path, struct stat64 *buffer) {
-    char realpath[PATH_MAX];
-
-    GET_REAL_SYMBOL(lstat64);
-
-    /* Do it the quick way if not chroot */
-    if(chrootdir == NULL) {
-        return _lstat64(path, buffer);
-    }
-
-    if(strlen(path) +1 > PATH_MAX) {
-        errno = ENAMETOOLONG;
-        return -1;
-    }
-
-    if(get_full_path(realpath, path) == -1) {
-        return -1;
-    }
-
-    return _lstat64(realpath, buffer);
-}
 
 
 int readlink(const char *path, char *buffer, size_t buffersize) {
@@ -733,9 +817,7 @@ static int cache_file_complete(int fd, struct stat64 *st) {
         return 1;
     }
 
-    GET_REAL_SYMBOL(fstat64);
-
-    if(_fstat64(fd, st)) {
+    if(realfstat64(fd, st)) {
 #ifdef DEBUG
         perror("cache_file_complete: fstat64");
 #endif
@@ -754,10 +836,8 @@ static int cache_file_complete(int fd, struct stat64 *st) {
 /* -1 == error, 0 == timeout, 1 == data */
 int wait_for_io(int fd, off64_t off, struct stat64 *st) {
 
-    GET_REAL_SYMBOL(fstat64);
-
     while(1) {
-        if(_fstat64(fd, st) < 0) {
+        if(realfstat64(fd, st) < 0) {
 #ifdef DEBUG
             perror("httpcacheopen: wait_for_io: fstat64");
 #endif
@@ -835,7 +915,7 @@ ssize_t read(int fd, void *buf, size_t count) {
     }
 
     /* OK. Let's wait for some action then... */
-    off = lseek64(fd, SEEK_CUR, 0);
+    off = lseek64(fd, 0, SEEK_CUR);
     if(off == -1) {
 #ifdef DEBUG
         perror("httpcacheopen: read: lseek64");
@@ -943,13 +1023,18 @@ int fclose(FILE *fp) {
 }
 
 
-int fstat64(int fd, struct stat64 *buf) {
+#ifdef __linux
+int __fxstat64(int __ver, int fd, struct stat64 *buf) {
 
 #ifdef DEBUG
     fprintf(stderr, "httpcacheopen: fstat64 fd=%d\n", fd);
 #endif
 
-    GET_REAL_SYMBOL(fstat64);
+    /* Check ABI version */
+    if(__ver != _STAT_VER) {
+        fprintf(stderr, "httpcacheopen: __fxstat64(): stat version mismatch\n");
+        exit(2);
+    }
 
     if(fd < CACHE_MAXFD && cachefdinfo[fd].realst.st_size > 0) {
         /* Copy the struct for the real file straight off */
@@ -957,8 +1042,36 @@ int fstat64(int fd, struct stat64 *buf) {
         return 0;
     }
 
+    return realfstat64(fd, buf);
+}
+
+
+static int realfstat64(int fd, struct stat64 *buf) {
+    GET_REAL_SYMBOL(__fxstat64);
+    return ___fxstat64(_STAT_VER, fd, buf);
+}
+#else /* __linux */
+int fstat64(int fd, struct stat64 *buf) {
+
+#ifdef DEBUG
+    fprintf(stderr, "httpcacheopen: fstat64 fd=%d\n", fd);
+#endif
+
+    if(fd < CACHE_MAXFD && cachefdinfo[fd].realst.st_size > 0) {
+        /* Copy the struct for the real file straight off */
+        memcpy(buf, &cachefdinfo[fd].realst, sizeof(struct stat64));
+        return 0;
+    }
+
+    return realfstat64(fd, buf);
+}
+
+
+static int realfstat64(int fd, struct stat64 *buf) {
+    GET_REAL_SYMBOL(fstat64);
     return _fstat64(fd, buf);
 }
+#endif /* __linux */
 
 
 #ifndef WRAPPER_STAT_NOWRAP
@@ -1006,7 +1119,7 @@ ssize_t sendfile64(int out_fd, int in_fd, off64_t *off, size_t len) {
         realoff = *off;
     }
     else {
-        realoff = lseek64(in_fd, SEEK_CUR, 0);
+        realoff = lseek64(in_fd, 0, SEEK_CUR);
         if(realoff == -1) {
             return -1;
         }
