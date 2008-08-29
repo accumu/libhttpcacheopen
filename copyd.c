@@ -1,5 +1,5 @@
 static const char rcsid[] = /*Add RCS version string to binary */
-        "$Id: copyd.c,v 1.3 2008/08/11 22:59:18 source Exp source $";
+        "$Id: copyd.c,v 1.4 2008/08/11 23:25:51 source Exp source $";
 
 #define _GNU_SOURCE 1
 #define _XOPEN_SOURCE 600
@@ -81,6 +81,7 @@ void *handle_conn(void * arg) {
 #ifdef O_DIRECT
         | O_DIRECT
 #endif
+        /* FIXME: Use directio() on solaris */
         ;
     realfd = open(buf, oflag);
     if(realfd == -1) {

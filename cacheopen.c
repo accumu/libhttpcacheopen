@@ -1,6 +1,6 @@
 
 static const char cacheopenrcsid[] = /*Add RCS version string to binary */
-        "$Id: cacheopen.c,v 1.4 2008/05/10 11:09:49 source Exp source $";
+        "$Id: cacheopen.c,v 1.5 2008/05/11 19:26:51 source Exp source $";
 
 #include <sys/types.h>
 #include <utime.h>
@@ -196,6 +196,7 @@ static copy_status copy_file(int srcfd, int srcflags, off64_t len,
     /* Remove nonblocking IO, enable direct IO */
     modflags = srcflags;
     if(srcflags & O_NONBLOCK
+/* FIXME: Use directio() on solaris */
 #ifdef O_DIRECT
             || !(srcflags & O_DIRECT) ) {
         modflags |= O_DIRECT;
