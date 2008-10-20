@@ -43,7 +43,7 @@
 #include "cacheopen.c"
 
 static const char rcsid[] = /*Add RCS version string to binary */
-        "$Id: wrapper.c,v 1.12 2008/08/10 12:10:22 source Exp source $";
+        "$Id: wrapper.c,v 1.13 2008/08/12 16:59:02 source Exp source $";
 
 #ifdef USE_COPYD
 typedef struct cachefdinfo_t {
@@ -214,6 +214,13 @@ int open(const char *path, int oflag, /* mode_t mode */...) {
     }
     else {
         realfd = _open(realpath, oflag);
+    }
+
+    if(geteuid() == 0) {
+#ifdef DEBUG
+        fprintf(stderr, "open: euid == 0, skipping\n");
+#endif
+        return(realfd);
     }
 
     if(cacheopen_check(realpath) == -1) {
