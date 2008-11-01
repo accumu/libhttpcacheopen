@@ -5,6 +5,11 @@
 #define _LARGEFILE64_SOURCE 1
 #define _LARGE_FILE_API 1
 
+/* For directio() */
+#ifdef __sun
+#define __EXTENSIONS__
+#endif /* __sun */
+
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -43,7 +48,7 @@
 #include "cacheopen.c"
 
 static const char rcsid[] = /*Add RCS version string to binary */
-        "$Id: wrapper.c,v 1.13 2008/08/12 16:59:02 source Exp source $";
+        "$Id: wrapper.c,v 1.14 2008/10/20 17:24:16 source Exp source $";
 
 #ifdef USE_COPYD
 typedef struct cachefdinfo_t {
@@ -280,7 +285,8 @@ int open(const char *path, int oflag, /* mode_t mode */...) {
 #endif /* USE_COPYD */
         }
         else if(copy_file(realfd, oflag, realst.st_size, realst.st_mtime,
-                          cachepath, _open, realstat64, _read, _close) 
+                          cachepath, _open, realstat64, realfstat64, 
+                          _read, _close) 
                 == COPY_FAIL)
         {
 #ifdef DEBUG

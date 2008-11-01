@@ -1,5 +1,5 @@
 static const char rcsid[] = /*Add RCS version string to binary */
-        "$Id: copyd.c,v 1.4 2008/08/11 23:25:51 source Exp source $";
+        "$Id: copyd.c,v 1.5 2008/08/29 12:29:36 source Exp source $";
 
 #define _GNU_SOURCE 1
 #define _XOPEN_SOURCE 600
@@ -7,6 +7,11 @@ static const char rcsid[] = /*Add RCS version string to binary */
 
 #define _LARGEFILE64_SOURCE 1
 #define _LARGE_FILE_API 1
+
+/* For directio() */
+#ifdef __sun
+#define __EXTENSIONS__
+#endif /* __sun */
 
 #include <pthread.h>
 #include <sys/types.h>
@@ -118,7 +123,7 @@ void *handle_conn(void * arg) {
     if(cachefd == CACHEOPEN_FAIL || cachefd == CACHEOPEN_STALE) {
         /* Either no cached file or stale cached file */
         copy_file(realfd, oflag, realst.st_size, realst.st_mtime, cachepath, 
-                  open, stat64, read, close);
+                  open, stat64, fstat64, read, close);
     }
 
     goto ok;
