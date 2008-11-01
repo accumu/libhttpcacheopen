@@ -1,6 +1,6 @@
 
 static const char cacheopenrcsid[] = /*Add RCS version string to binary */
-        "$Id: cacheopen.c,v 1.5 2008/05/11 19:26:51 source Exp source $";
+        "$Id: cacheopen.c,v 1.6 2008/08/29 12:30:06 source Exp source $";
 
 #include <sys/types.h>
 #include <utime.h>
@@ -163,10 +163,11 @@ static copy_status copy_file(int srcfd, int srcflags, off64_t len,
                          time_t mtime, char *destfile,
                          int (*openfunc)(const char *, int, ...),
                          int (*statfunc)(const char *, struct stat64 *),
+                         int (*fstat64func)(int filedes, struct stat64 *buf),
                          ssize_t (*readfunc)(int fd, void *buf, size_t count),
                          int (*closefunc)(int fd))
 {
-    int                 destfd, modflags;
+    int                 destfd, modflags, i;
     void                *tmp;
     char                *buf;
     ssize_t             amt, wrt, done;
@@ -216,8 +217,33 @@ static copy_status copy_file(int srcfd, int srcflags, off64_t len,
         }
 #endif
     }
+#ifdef __sun
+    directio(srcfd, DIRECTIO_ON);
+#endif /* __sun */
 
+    i=0;
     while(len > 0) {
+        if(i++ >= CPCHKINTERVAL) {
+            struct stat64 st;
+
+            i=0;
+            if(fstat64func(destfd, &st) == -1) {
+                /* Shouldn't happen, really */
+#ifdef DEBUG
+                perror("copy_file: Unable to fstat destfd");
+#endif
+                rc = COPY_FAIL;
+                goto exit;
+            }
+            if(st.st_nlink == 0) {
+                /* Destination file deleted, no use to continue */
+#ifdef DEBUG
+                fprintf(stderr, "httpcacheopen: copy_file: destfd unlinked\n");
+#endif
+                rc = COPY_FAIL;
+                goto exit;
+            }
+        }
         amt = readfunc(srcfd, buf, CPBUFSIZE);
         if(amt == -1) {
             if(errno == EINTR) {
@@ -280,6 +306,12 @@ exit:
     }
 
     lseek64(srcfd, 0, SEEK_SET);
+
+#ifdef __sun
+    /* OK, we're being lame assuming file was opened with default
+       behaviour */
+    directio(srcfd, DIRECTIO_OFF);
+#endif /* __sun */
 
     if(srcflags != modflags) {
         fcntl(srcfd, F_SETFL, srcflags);
