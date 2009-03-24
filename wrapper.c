@@ -48,7 +48,7 @@
 #include "cacheopen.c"
 
 static const char rcsid[] = /*Add RCS version string to binary */
-        "$Id: wrapper.c,v 1.14 2008/10/20 17:24:16 source Exp source $";
+        "$Id: wrapper.c,v 1.15 2008/11/01 21:48:31 source Exp source $";
 
 #ifdef USE_COPYD
 typedef struct cachefdinfo_t {
@@ -274,7 +274,7 @@ int open(const char *path, int oflag, /* mode_t mode */...) {
 #endif
 
 #ifdef USE_COPYD
-            if(copyd_file(realpath, _read) == -1) {
+            if(copyd_file(realpath, _read, _close) == -1) {
 #ifdef DEBUG
                 fprintf(stderr, "open: copyd_file failed\n");
 #endif

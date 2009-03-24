@@ -1,6 +1,6 @@
 
 static const char cacheopenrcsid[] = /*Add RCS version string to binary */
-        "$Id: cacheopen.c,v 1.6 2008/08/29 12:30:06 source Exp source $";
+        "$Id: cacheopen.c,v 1.7 2008/11/01 21:47:46 source Exp source $";
 
 #include <sys/types.h>
 #include <utime.h>
@@ -427,10 +427,12 @@ static int cacheopen(struct stat64 *cachest, struct stat64 *realst,
 
 #ifdef USE_COPYD
 static int copyd_file(char *file,
-                      ssize_t (*readfunc)(int fd, void *buf, size_t count)) 
+                      ssize_t (*readfunc)(int fd, void *buf, size_t count),
+                      int (*closefunc)(int fd))
 {
     struct sockaddr_un sa;
-    int sock, rc;
+    int rc;
+    int sock=-1;
     struct sigaction oldsig;
     char buf[10]; /* Should only get "OK\0" or "FAIL\0" */
     ssize_t amt;
@@ -523,6 +525,9 @@ static int copyd_file(char *file,
     }
 
 err:
+    if(sock >= 0) {
+        closefunc(sock);
+    }
     if(oldsig.sa_flags & SA_SIGINFO || oldsig.sa_handler != SIG_IGN) {
         if(sigaction(SIGPIPE, &oldsig, NULL) == -1) {
 #ifdef DEBUG
