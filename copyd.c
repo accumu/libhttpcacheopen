@@ -1,5 +1,5 @@
 static const char rcsid[] = /*Add RCS version string to binary */
-        "$Id: copyd.c,v 1.5 2008/08/29 12:29:36 source Exp source $";
+        "$Id: copyd.c,v 1.6 2008/11/01 21:48:29 source Exp source $";
 
 #define _GNU_SOURCE 1
 #define _XOPEN_SOURCE 600
@@ -42,7 +42,11 @@ static const char rcsid[] = /*Add RCS version string to binary */
 static int debug=1;
 
 void *handle_conn(void * arg) {
-    int fd = (int) arg;
+
+    /* To avoid the bogus gcc cast to/from pointer of different size warning */
+    size_t argtmp = (size_t) arg;
+    int fd = (int) argtmp;
+
     char buf[PATH_MAX], cachepath[PATH_MAX];
     ssize_t amt;
     int realfd = -1, cachefd = -1, oflag;
@@ -233,7 +237,10 @@ int main(void) {
         if(rc >= 0) {
             pthread_t thr;
 
-            if(pthread_create(&thr, &attr, handle_conn, (void *) rc) != 0) {
+            /* To avoid bogus gcc cast to/from pointer of diff. size warning */
+            size_t arg = rc;    /* Pass fd as argument to thread */
+
+            if(pthread_create(&thr, &attr, handle_conn, (void *) arg) != 0) {
                 perror("pthread_create");
                 exit(25);
             }
