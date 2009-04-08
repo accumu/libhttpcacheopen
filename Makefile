@@ -1,4 +1,4 @@
-# $Id: Makefile,v 1.2 2008/05/11 09:00:34 source Exp source $
+# $Id: Makefile,v 1.3 2008/05/12 07:21:09 source Exp source $
 uname := $(shell uname)
 
 LIBCFLAGS = -DUSE_COPYD
@@ -62,7 +62,7 @@ libhttpcacheopen.debug.64.so: wrapper.c $(LIBDEPS)
 
 version: $(LIBOBJECTS) $(BINOBJECTS)
 	@echo ""
-	@echo libhttpcacheopen version $(shell ident $(LIBOBJECTS) $(BINOBJECTS) | awk '/Id:/ {print $$4}' | tr -d / | sort -rn | head -1) for $(uname) built successfully.
+	@echo libhttpcacheopen version $(shell ident $(LIBOBJECTS) $(BINOBJECTS) | awk '/Id:/ {print $$4}' | tr -d / | sort -rn | head -1) for $(uname) $(shell accarchname.sh) built successfully.
 
 
 clean:
