@@ -1,6 +1,6 @@
 
 static const char cacheopenrcsid[] = /*Add RCS version string to binary */
-        "$Id: cacheopen.c,v 1.7 2008/11/01 21:47:46 source Exp source $";
+        "$Id: cacheopen.c,v 1.8 2009/03/24 11:48:58 source Exp source $";
 
 #include <sys/types.h>
 #include <utime.h>
@@ -280,7 +280,8 @@ static copy_status copy_file(int srcfd, int srcflags, off64_t len,
     if(len != 0) {
         /* Weird, didn't read expected amount */
 #ifdef DEBUG
-        fprintf(stderr, "httpcacheopen: copy_file: len %lld left\n", len);
+        fprintf(stderr, "httpcacheopen: copy_file: len %lld left\n", 
+                (long long)len);
 #endif
         rc = COPY_FAIL;
         goto exit;
