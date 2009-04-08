@@ -48,7 +48,7 @@
 #include "cacheopen.c"
 
 static const char rcsid[] = /*Add RCS version string to binary */
-        "$Id: wrapper.c,v 1.15 2008/11/01 21:48:31 source Exp source $";
+        "$Id: wrapper.c,v 1.16 2009/03/24 11:49:34 source Exp source $";
 
 #ifdef USE_COPYD
 typedef struct cachefdinfo_t {
@@ -73,7 +73,15 @@ static int (*_lstat)(const char *, struct stat *);
 static int (*_fstat)(int, struct stat *);
 #endif /* WRAPPER_STAT_NOWRAP */
 
+#ifdef _AIX
+/* Ugh. There have been different type declarations for readlink()
+   floating around over the years. AIX native uses the old BSD typing. */
+/* FIXME: Should probably catch the internal __readlink64 too on AIX, as
+          that's what the SUSV3 readlink() wrapper uses */
 static int (*_readlink)(const char *, char *, size_t);
+#else /* _AIX */
+static ssize_t (*_readlink)(const char *, char *, size_t);
+#endif /* _AIX */
 
 static int realstat64(const char *, struct stat64 *);
 
@@ -783,7 +791,13 @@ int lstat(const char *path, struct stat *buffer) {
 #endif /* WRAPPER_STAT_NOWRAP */
 
 
-int readlink(const char *path, char *buffer, size_t buffersize) {
+#ifdef _AIX
+/* AIX native uses the old BSD typing. See comment at beginning of this file */
+int
+#else
+ssize_t 
+#endif
+readlink(const char *path, char *buffer, size_t buffersize) {
     char realpath[PATH_MAX];
 
     GET_REAL_SYMBOL(readlink);
@@ -946,7 +960,7 @@ ssize_t read(int fd, void *buf, size_t count) {
 
 #ifdef DEBUG
     fprintf(stderr, "httpcacheopen: read fd=%d: Got data, now size=%lld\n",
-            fd, st.st_size);
+            fd, (long long)st.st_size);
 #endif
 
     /* Assume read will succeed now (assuming makes an ass out of u and me) */
@@ -995,7 +1009,12 @@ size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream) {
         fprintf(stderr, "httpcacheopen: fread: File not complete\n");
 #endif
 
-        if(st.st_size < pos + size*nmemb) {
+        if(pos < 0) {
+            /* Shouldn't happen, but just in case... */
+            pos = 0;
+        }
+
+        if(st.st_size < pos + (off_t) (size*nmemb)) {
 #ifdef DEBUG
             fprintf(stderr, "httpcacheopen: fread: Wait for data\n");
 #endif
@@ -1140,7 +1159,7 @@ ssize_t sendfile64(int out_fd, int in_fd, off64_t *off, size_t len) {
 
 #ifdef DEBUG
     fprintf(stderr, "httpcacheopen: sendfile64 outfd=%d infd=%d off=%lld "
-                    "size=%zu\n", out_fd, in_fd, realoff, len);
+                    "size=%zu\n", out_fd, in_fd, (long long)realoff, len);
 #endif
 
     do {
@@ -1155,7 +1174,7 @@ ssize_t sendfile64(int out_fd, int in_fd, off64_t *off, size_t len) {
 #ifdef DEBUG
                 fprintf(stderr, "httpcacheopen: sendfile64 outfd=%d infd=%d "
                                 "off=%lld size=%zu: No data available\n", 
-                                out_fd, in_fd, realoff, len);
+                                out_fd, in_fd, (long long)realoff, len);
 #endif
                 /* FIXME: Non-blocking based on the input file is probably
                    a really bad idea since it will probably spin like
@@ -1190,14 +1209,14 @@ ssize_t sendfile64(int out_fd, int in_fd, off64_t *off, size_t len) {
         else {
             avail = len;
         }
-        amt = _sendfile64(out_fd, in_fd, &realoff, MIN(len,avail));
+        amt = _sendfile64(out_fd, in_fd, &realoff, MIN((off64_t)len,avail));
         if(amt == -1) {
             tot = -1;
             goto out;
         }
 #ifdef DEBUG
         fprintf(stderr, "httpcacheopen: sendfile64 outfd=%d infd=%d off=%lld"
-                ": sent %zd\n", out_fd, in_fd, realoff, amt);
+                ": sent %zd\n", out_fd, in_fd, (long long)realoff, amt);
 #endif
         len -= amt;
         tot += amt;
