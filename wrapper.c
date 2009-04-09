@@ -48,7 +48,7 @@
 #include "cacheopen.c"
 
 static const char rcsid[] = /*Add RCS version string to binary */
-        "$Id: wrapper.c,v 1.16 2009/03/24 11:49:34 source Exp source $";
+        "$Id: wrapper.c,v 1.17 2009/04/08 08:16:58 source Exp source $";
 
 #ifdef USE_COPYD
 typedef struct cachefdinfo_t {
@@ -836,6 +836,7 @@ static int cache_file_complete(int fd, struct stat64 *st) {
     }
 
     /* Zero size means not a cachefd */
+    /* FIXME: BUG: Borde inte det vara st_size == 0 här ? eller <= 0 ?? */
     if(cachefdinfo[fd].realst.st_size < 0) {
         return 1;
     }
