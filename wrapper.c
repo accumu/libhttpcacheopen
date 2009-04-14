@@ -48,7 +48,7 @@
 #include "cacheopen.c"
 
 static const char rcsid[] = /*Add RCS version string to binary */
-        "$Id: wrapper.c,v 1.17 2009/04/08 08:16:58 source Exp source $";
+        "$Id: wrapper.c,v 1.18 2009/04/09 21:22:01 source Exp source $";
 
 #ifdef USE_COPYD
 typedef struct cachefdinfo_t {
@@ -262,6 +262,9 @@ int open(const char *path, int oflag, /* mode_t mode */...) {
         /* Somewhere, something went very wrong */
         return -1;
     }
+
+    /* FIXME: Should probably check for realst->st_size > 0 here to avoid
+              caching zero-byte files. */
 
     /* If we get here, there are possibillities to use a cached copy of the
        file in the httpcache instead */
@@ -836,8 +839,7 @@ static int cache_file_complete(int fd, struct stat64 *st) {
     }
 
     /* Zero size means not a cachefd */
-    /* FIXME: BUG: Borde inte det vara st_size == 0 här ? eller <= 0 ?? */
-    if(cachefdinfo[fd].realst.st_size < 0) {
+    if(cachefdinfo[fd].realst.st_size <= 0) {
         return 1;
     }
 
