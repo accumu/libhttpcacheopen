@@ -48,7 +48,7 @@
 #include "cacheopen.c"
 
 static const char rcsid[] = /*Add RCS version string to binary */
-        "$Id: wrapper.c,v 1.18 2009/04/09 21:22:01 source Exp source $";
+        "$Id: wrapper.c,v 1.19 2009/04/14 18:11:28 source Exp source $";
 
 #ifdef USE_COPYD
 typedef struct cachefdinfo_t {
@@ -67,12 +67,6 @@ static FILE *(*_fopen64)(const char *, const char *);
 static int (*_chdir)(const char *);
 static char *(*_getcwd)(char *, size_t);
 
-#ifndef WRAPPER_STAT_NOWRAP
-static int (*_stat)(const char *, struct stat *);
-static int (*_lstat)(const char *, struct stat *);
-static int (*_fstat)(int, struct stat *);
-#endif /* WRAPPER_STAT_NOWRAP */
-
 #ifdef _AIX
 /* Ugh. There have been different type declarations for readlink()
    floating around over the years. AIX native uses the old BSD typing. */
@@ -86,11 +80,19 @@ static ssize_t (*_readlink)(const char *, char *, size_t);
 static int realstat64(const char *, struct stat64 *);
 
 #ifdef __linux
-/* Ugh. Linux uses inlined wrappers for *stat64, so we need to catch
-   __*xstat64 instead */
+/* Ugh. Linux uses inlined wrappers for *stat*, so we need to catch
+   __*xstat* instead */
+static int (*___xstat)(int, __const char *, struct stat *);
+static int (*___lxstat)(int, __const char *, struct stat *);
+static int (*___fxstat)(int, int, struct stat *);
 static int (*___xstat64)(int, __const char *, struct stat64 *);
 static int (*___lxstat64)(int, __const char *, struct stat64 *);
 #else /* __linux */
+#ifndef WRAPPER_STAT_NOWRAP
+static int (*_stat)(const char *, struct stat *);
+static int (*_lstat)(const char *, struct stat *);
+static int (*_fstat)(int, struct stat *);
+#endif /* WRAPPER_STAT_NOWRAP */
 static int (*_stat64)(const char *, struct stat64 *);
 static int (*_lstat64)(const char *, struct stat64 *);
 #endif /* __linux */
@@ -624,8 +626,71 @@ int chroot(const char *path) {
     return(0);
 }
 
+/* Ugh. Linux uses inlined wrappers for the stat-functions, so we 
+   need to catch __*stat* instead. Code duplication for the win */
 
-#ifndef WRAPPER_STAT_NOWRAP
+#ifndef WRAPPER_STAT_NOWRAP /* FIXME: Solaris kludge */
+#ifdef __linux
+
+int __xstat (int __ver, __const char *path, struct stat *buffer) {
+    char realpath[PATH_MAX];
+
+    GET_REAL_SYMBOL(__xstat);
+
+    /* Check for ABI mismatch */
+    if(__ver != _STAT_VER) {
+        fprintf(stderr, "httpcacheopen: __xstat(): stat version mismatch\n");
+        exit(2);
+    }
+
+    /* Do it the quick way if not chroot */
+    if(chrootdir == NULL) {
+        return ___xstat(__ver, path, buffer);
+    }
+
+    if(strlen(path) +1 > PATH_MAX) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+
+    if(get_full_path(realpath, path) == -1) {
+        return -1;
+    }
+
+    return ___xstat(_STAT_VER, realpath, buffer);
+}
+
+
+int __lxstat (int __ver, __const char *path, struct stat *buffer) {
+    char realpath[PATH_MAX];
+
+    GET_REAL_SYMBOL(__lxstat);
+
+    /* Do it the quick way if not chroot */
+    if(chrootdir == NULL) {
+        return ___lxstat(__ver, path, buffer);
+    }
+
+    /* Check for ABI mismatch */
+    if(__ver != _STAT_VER) {
+        fprintf(stderr, "httpcacheopen: __lxstat(): stat version mismatch\n");
+        exit(2);
+    }
+
+    if(strlen(path) +1 > PATH_MAX) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+
+    if(get_full_path(realpath, path) == -1) {
+        return -1;
+    }
+
+    return ___lxstat(__ver, realpath, buffer);
+}
+
+#else /* __linux */
+
 int stat(const char *path, struct stat *buffer) {
     char realpath[PATH_MAX];
 
@@ -647,12 +712,34 @@ int stat(const char *path, struct stat *buffer) {
 
     return _stat(realpath, buffer);
 }
+
+int lstat(const char *path, struct stat *buffer) {
+    char realpath[PATH_MAX];
+
+    GET_REAL_SYMBOL(lstat);
+
+    /* Do it the quick way if not chroot */
+    if(chrootdir == NULL) {
+        return _lstat(path, buffer);
+    }
+
+    if(strlen(path) +1 > PATH_MAX) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+
+    if(get_full_path(realpath, path) == -1) {
+        return -1;
+    }
+
+    return _lstat(realpath, buffer);
+}
+
+#endif /* __linux */
 #endif /* WRAPPER_STAT_NOWRAP */
 
 
 #ifdef __linux
-/* Ugh. Linux uses inlined wrappers for *stat64, so we need to catch
-   __*xstat64 instead. Code duplication for the win */
 int __xstat64 (int __ver, __const char *path, struct stat64 *buffer) {
     char realpath[PATH_MAX];
 
@@ -769,31 +856,6 @@ int lstat64(const char *path, struct stat64 *buffer) {
 #endif /* __linux */
 
 
-#ifndef WRAPPER_STAT_NOWRAP
-int lstat(const char *path, struct stat *buffer) {
-    char realpath[PATH_MAX];
-
-    GET_REAL_SYMBOL(lstat);
-
-    /* Do it the quick way if not chroot */
-    if(chrootdir == NULL) {
-        return _lstat(path, buffer);
-    }
-
-    if(strlen(path) +1 > PATH_MAX) {
-        errno = ENAMETOOLONG;
-        return -1;
-    }
-
-    if(get_full_path(realpath, path) == -1) {
-        return -1;
-    }
-
-    return _lstat(realpath, buffer);
-}
-#endif /* WRAPPER_STAT_NOWRAP */
-
-
 #ifdef _AIX
 /* AIX native uses the old BSD typing. See comment at beginning of this file */
 int
@@ -904,13 +966,13 @@ ssize_t read(int fd, void *buf, size_t count) {
     struct stat64   st;
     off64_t         off;
 
-#ifdef DEBUG
-    fprintf(stderr, "httpcacheopen: read fd=%d\n", fd);
-#endif
-
     GET_REAL_SYMBOL(read);
 
     amt = _read(fd, buf, count);
+
+#ifdef DEBUG
+    fprintf(stderr, "httpcacheopen: read fd=%d amt=%zd\n", fd, amt);
+#endif
 
     /* Nothing fancy needed if we got data or error :) */
     if(amt != 0) {
@@ -920,15 +982,14 @@ ssize_t read(int fd, void *buf, size_t count) {
     rc = cache_file_complete(fd, &st);
     if(rc == 1) {
         /* File complete, we have really hit EOF */
+#ifdef DEBUG
+        fprintf(stderr, "httpcacheopen: read: Really hit EOF\n");
+#endif
         return amt;
     }
     else if(rc < 0) {
         return -1;
     }
-
-#ifdef DEBUG
-    fprintf(stderr, "httpcacheopen: read fd=%d: Hit EOF but file not complete\n", fd);
-#endif
 
     /* OK, there will be more data soon. First check if we are non-blocking */
     /* FIXME: Is this really smart? The fd will return as readable by select
@@ -952,6 +1013,11 @@ ssize_t read(int fd, void *buf, size_t count) {
 #endif
         return -1;
     }
+
+#ifdef DEBUG
+    fprintf(stderr, "httpcacheopen: read fd=%d off=%lld: Hit EOF but file not complete\n", fd, (long long)off);
+#endif
+
     rc = wait_for_io(fd, off, &st);
     if(rc == -1) {
         return -1;
@@ -981,7 +1047,7 @@ int close(int fd) {
 
     if(fd < CACHE_MAXFD) {
         /* Clear the entire struct to return it to default state */
-        memset(&cachefdinfo[fd].realst, sizeof(struct stat64), 0);
+        memset(&cachefdinfo[fd].realst, 0, sizeof(struct stat64));
     }
 
     return _close(fd);
@@ -1051,7 +1117,7 @@ int fclose(FILE *fp) {
 
     if(fd < CACHE_MAXFD) {
         /* Clear the entire struct to return it to default state */
-        memset(&cachefdinfo[fd].realst, sizeof(struct stat64), 0);
+        memset(&cachefdinfo[fd].realst, 0, sizeof(struct stat64));
     }
 
     return _fclose(fp);
@@ -1109,7 +1175,56 @@ static int realfstat64(int fd, struct stat64 *buf) {
 #endif /* __linux */
 
 
-#ifndef WRAPPER_STAT_NOWRAP
+#ifndef WRAPPER_STAT_NOWRAP /* FIXME: Solaris kludge */
+
+#ifdef __linux
+
+int __fxstat(int __ver, int fd, struct stat *buf) {
+
+#ifdef DEBUG
+    fprintf(stderr, "httpcacheopen: fstat fd=%d\n", fd);
+#endif
+
+    GET_REAL_SYMBOL(__fxstat);
+
+    /* Check ABI version */
+    if(__ver != _STAT_VER) {
+        fprintf(stderr, "httpcacheopen: __fxstat(): stat version mismatch\n");
+        exit(2);
+    }
+
+    if(fd < CACHE_MAXFD && cachefdinfo[fd].realst.st_size > 0) {
+        if(sizeof(off_t) == sizeof(off64_t) 
+                && sizeof(struct stat) == sizeof(struct stat64)) 
+        {
+            /* Boldly assume the structs are identical */
+            memcpy(buf, &cachefdinfo[fd].realst, sizeof(struct stat64));
+        }
+        else {
+            /* We can't memcpy the real file stat struct, different types */
+            memset(buf, 0, sizeof(struct stat));
+            buf->st_dev = cachefdinfo[fd].realst.st_dev;
+            buf->st_ino = cachefdinfo[fd].realst.st_ino;
+            buf->st_mode = cachefdinfo[fd].realst.st_mode;
+            buf->st_nlink = cachefdinfo[fd].realst.st_nlink;
+            buf->st_uid = cachefdinfo[fd].realst.st_uid;
+            buf->st_gid = cachefdinfo[fd].realst.st_gid;
+            buf->st_rdev = cachefdinfo[fd].realst.st_rdev;
+            buf->st_size = cachefdinfo[fd].realst.st_size;
+            buf->st_blksize = cachefdinfo[fd].realst.st_blksize;
+            buf->st_blocks = cachefdinfo[fd].realst.st_blocks;
+            buf->st_atime = cachefdinfo[fd].realst.st_atime;
+            buf->st_mtime = cachefdinfo[fd].realst.st_mtime;
+            buf->st_ctime = cachefdinfo[fd].realst.st_ctime;
+        }
+        return 0;
+    }
+
+    return ___fxstat(_STAT_VER, fd, buf);
+}
+
+#else /* __linux */
+
 int fstat(int fd, struct stat *buf) {
 
 #ifdef DEBUG
@@ -1119,25 +1234,36 @@ int fstat(int fd, struct stat *buf) {
     GET_REAL_SYMBOL(fstat);
 
     if(fd < CACHE_MAXFD && cachefdinfo[fd].realst.st_size > 0) {
-        /* We can't memcpy the real file stat struct, different types */
-        buf->st_dev = cachefdinfo[fd].realst.st_dev;
-        buf->st_ino = cachefdinfo[fd].realst.st_ino;
-        buf->st_mode = cachefdinfo[fd].realst.st_mode;
-        buf->st_nlink = cachefdinfo[fd].realst.st_nlink;
-        buf->st_uid = cachefdinfo[fd].realst.st_uid;
-        buf->st_gid = cachefdinfo[fd].realst.st_gid;
-        buf->st_rdev = cachefdinfo[fd].realst.st_rdev;
-        buf->st_size = cachefdinfo[fd].realst.st_size;
-        buf->st_blksize = cachefdinfo[fd].realst.st_blksize;
-        buf->st_blocks = cachefdinfo[fd].realst.st_blocks;
-        buf->st_atime = cachefdinfo[fd].realst.st_atime;
-        buf->st_mtime = cachefdinfo[fd].realst.st_mtime;
-        buf->st_ctime = cachefdinfo[fd].realst.st_ctime;
+        if(sizeof(off_t) == sizeof(off64_t) 
+                && sizeof(struct stat) == sizeof(struct stat64)) 
+        {
+            /* Boldly assume the structs are identical */
+            memcpy(buf, &cachefdinfo[fd].realst, sizeof(struct stat64));
+        }
+        else {
+            /* We can't memcpy the real file stat struct, different types */
+            memset(buf, 0, sizeof(struct stat));
+            buf->st_dev = cachefdinfo[fd].realst.st_dev;
+            buf->st_ino = cachefdinfo[fd].realst.st_ino;
+            buf->st_mode = cachefdinfo[fd].realst.st_mode;
+            buf->st_nlink = cachefdinfo[fd].realst.st_nlink;
+            buf->st_uid = cachefdinfo[fd].realst.st_uid;
+            buf->st_gid = cachefdinfo[fd].realst.st_gid;
+            buf->st_rdev = cachefdinfo[fd].realst.st_rdev;
+            buf->st_size = cachefdinfo[fd].realst.st_size;
+            buf->st_blksize = cachefdinfo[fd].realst.st_blksize;
+            buf->st_blocks = cachefdinfo[fd].realst.st_blocks;
+            buf->st_atime = cachefdinfo[fd].realst.st_atime;
+            buf->st_mtime = cachefdinfo[fd].realst.st_mtime;
+            buf->st_ctime = cachefdinfo[fd].realst.st_ctime;
+        }
         return 0;
     }
 
     return _fstat(fd, buf);
 }
+#endif /* __linux */
+
 #endif /* WRAPPER_STAT_NOWRAP */
 
 #if defined(__sun) || defined(__linux)
