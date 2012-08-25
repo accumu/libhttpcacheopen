@@ -1,6 +1,6 @@
 
 static const char cacheopenrcsid[] = /*Add RCS version string to binary */
-        "$Id: cacheopen.c,v 1.9 2009/04/08 08:18:10 source Exp source $";
+        "$Id: cacheopen.c,v 1.10 2012/08/25 08:20:34 source Exp source $";
 
 #include <sys/types.h>
 #include <utime.h>
@@ -167,10 +167,10 @@ static copy_status copy_file(int srcfd, int srcflags, off64_t len,
                          ssize_t (*readfunc)(int fd, void *buf, size_t count),
                          int (*closefunc)(int fd))
 {
-    int                 destfd, modflags, i;
-    void                *tmp;
+    int                 destfd, modflags, i, err;
     char                *buf;
     ssize_t             amt, wrt, done;
+    off64_t             srcoff;
     copy_status         rc = COPY_OK;
 
     destfd = open_new_file(destfile, openfunc, statfunc);
@@ -178,31 +178,16 @@ static copy_status copy_file(int srcfd, int srcflags, off64_t len,
         return(destfd);
     }
 
-#ifdef USE_O_DIRECT
-    /* C99 strict aliasing rules forces us to dance via a temporary pointer */
-    if(posix_memalign(&tmp, 512, CPBUFSIZE)) {
-        buf = NULL;
-    }
-    else {
-        buf = tmp;
-    }
-#else /* USE_O_DIRECT */
     buf = malloc(CPBUFSIZE);
-#endif /* USE_O_DIRECT */
     if(buf == NULL) {
         closefunc(destfd);
         return(COPY_FAIL);
     }
 
-    /* Remove nonblocking IO, enable direct IO */
+    /* Remove nonblocking IO */
     modflags = srcflags;
     if(srcflags & O_NONBLOCK
-#ifdef USE_O_DIRECT
-            || !(srcflags & O_DIRECT) ) {
-        modflags |= O_DIRECT;
-#else /* USE_O_DIRECT */
         ) {
-#endif
         modflags &= ~O_NONBLOCK;
         if((fcntl(srcfd, F_SETFL, modflags)) == -1) {
 #ifdef DEBUG
@@ -216,10 +201,14 @@ static copy_status copy_file(int srcfd, int srcflags, off64_t len,
         }
 #endif
     }
-#if defined __sun && defined USE_O_DIRECT
-    directio(srcfd, DIRECTIO_ON);
-#endif /* __sun && USE_O_DIRECT */
 
+    /* We expect sequential IO */
+    err=posix_fadvise(srcfd, 0, 0, POSIX_FADV_SEQUENTIAL);
+    if(err) {
+        fprintf(stderr, "posix_fadvise: %s\n", strerror(err));
+    }
+
+    srcoff=0;
     i=0;
     while(len > 0) {
         if(i++ >= CPCHKINTERVAL) {
@@ -257,6 +246,19 @@ static copy_status copy_file(int srcfd, int srcflags, off64_t len,
         if(amt == 0) {
             break;
         }
+        /* We will never need this segment again */
+        err=posix_fadvise(srcfd, srcoff, amt, POSIX_FADV_DONTNEED);
+        if(err) {
+            fprintf(stderr, "posix_fadvise: %s\n", strerror(err));
+        }
+        srcoff += amt;
+        if(len-amt > 0) {
+            /* Tell kernel that we'll need the next segment soon */
+            err=posix_fadvise(srcfd, srcoff, CPBUFSIZE, POSIX_FADV_WILLNEED);
+            if(err) {
+                fprintf(stderr, "posix_fadvise: %s\n", strerror(err));
+            }
+            }
         done = 0;
         while(amt > 0) {
             wrt = write(destfd, buf+done, amt);
