@@ -1,5 +1,5 @@
 static const char rcsid[] = /*Add RCS version string to binary */
-        "$Id: copyd.c,v 1.6 2008/11/01 21:48:29 source Exp source $";
+        "$Id: copyd.c,v 1.7 2009/04/08 08:18:44 source Exp source $";
 
 #define _GNU_SOURCE 1
 #define _XOPEN_SOURCE 600
@@ -87,7 +87,7 @@ void *handle_conn(void * arg) {
     }
 
     oflag = O_RDONLY
-#ifdef O_DIRECT
+#ifdef USE_O_DIRECT
         | O_DIRECT
 #endif
         /* FIXME: Use directio() on solaris */
