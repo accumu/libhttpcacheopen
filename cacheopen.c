@@ -1,6 +1,6 @@
 
 static const char cacheopenrcsid[] = /*Add RCS version string to binary */
-        "$Id: cacheopen.c,v 1.8 2009/03/24 11:48:58 source Exp source $";
+        "$Id: cacheopen.c,v 1.9 2009/04/08 08:18:10 source Exp source $";
 
 #include <sys/types.h>
 #include <utime.h>
@@ -178,7 +178,7 @@ static copy_status copy_file(int srcfd, int srcflags, off64_t len,
         return(destfd);
     }
 
-#ifdef O_DIRECT
+#ifdef USE_O_DIRECT
     /* C99 strict aliasing rules forces us to dance via a temporary pointer */
     if(posix_memalign(&tmp, 512, CPBUFSIZE)) {
         buf = NULL;
@@ -186,9 +186,9 @@ static copy_status copy_file(int srcfd, int srcflags, off64_t len,
     else {
         buf = tmp;
     }
-#else /* O_DIRECT */
+#else /* USE_O_DIRECT */
     buf = malloc(CPBUFSIZE);
-#endif /* O_DIRECT */
+#endif /* USE_O_DIRECT */
     if(buf == NULL) {
         closefunc(destfd);
         return(COPY_FAIL);
@@ -197,11 +197,10 @@ static copy_status copy_file(int srcfd, int srcflags, off64_t len,
     /* Remove nonblocking IO, enable direct IO */
     modflags = srcflags;
     if(srcflags & O_NONBLOCK
-/* FIXME: Use directio() on solaris */
-#ifdef O_DIRECT
+#ifdef USE_O_DIRECT
             || !(srcflags & O_DIRECT) ) {
         modflags |= O_DIRECT;
-#else /* O_DIRECT */
+#else /* USE_O_DIRECT */
         ) {
 #endif
         modflags &= ~O_NONBLOCK;
@@ -217,9 +216,9 @@ static copy_status copy_file(int srcfd, int srcflags, off64_t len,
         }
 #endif
     }
-#ifdef __sun
+#if defined __sun && defined USE_O_DIRECT
     directio(srcfd, DIRECTIO_ON);
-#endif /* __sun */
+#endif /* __sun && USE_O_DIRECT */
 
     i=0;
     while(len > 0) {
