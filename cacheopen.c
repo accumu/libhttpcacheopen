@@ -1,6 +1,6 @@
 
 static const char cacheopenrcsid[] = /*Add RCS version string to binary */
-        "$Id: cacheopen.c,v 1.10 2012/08/25 08:20:34 source Exp source $";
+        "$Id: cacheopen.c,v 1.11 2012/08/25 15:21:32 source Exp source $";
 
 #include <sys/types.h>
 #include <utime.h>
@@ -541,3 +541,7 @@ err:
     return rc;
 }
 #endif /* USE_COPYD */
+
+void _httpcacheopen_cacheopen_dummy_keep_rcsid_string(void) {
+        fprintf(stderr, "%s", cacheopenrcsid);
+}
