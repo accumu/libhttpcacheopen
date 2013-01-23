@@ -92,7 +92,7 @@ typedef struct {
 /* #include "md5.h" */
 
 static const char md5rcsid[] = /*Add RCS version string to binary */
-        "$Id: md5.c,v 1.1 2006/11/16 15:22:04 source Exp source $";
+        "$Id: md5.c,v 1.2 2006/11/16 15:23:11 source Exp source $";
 
 /* forward declaration */
 static void Transform (UINT4 *buf, UINT4 *in);
@@ -327,3 +327,7 @@ static void Transform (UINT4 *buf, UINT4 *in)
  ** End of md5.c                                                     **
  ******************************* (cut) ********************************
  */
+
+void _httpcacheopen_md5_dummy_keep_rcsid_string(void) {
+        fprintf(stderr, "%s", md5rcsid);
+}
