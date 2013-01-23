@@ -1,5 +1,5 @@
 static const char rcsid[] = /*Add RCS version string to binary */
-        "$Id: copyd.c,v 1.7 2009/04/08 08:18:44 source Exp source $";
+        "$Id: copyd.c,v 1.8 2012/08/25 08:15:08 source Exp source $";
 
 #define _GNU_SOURCE 1
 #define _XOPEN_SOURCE 600
@@ -120,7 +120,9 @@ void *handle_conn(void * arg) {
 
     /* Write reply when we're pretty sure this will work in order not to pause
        requesting process until we're finished */
-    write(fd, "OK", 3);
+    if(write(fd, "OK", 3) < 0) {
+        perror("write reply OK");
+    }
     close(fd);
     fd = -1;
 
@@ -133,7 +135,9 @@ void *handle_conn(void * arg) {
     goto ok;
 
 err:
-    write(fd, "FAIL", 5);
+    if(write(fd, "FAIL", 5) < 0) {
+        /* Keep quiet even if we fail */
+    }
 ok:
     if(fd >= 0) {
         close(fd);
@@ -155,6 +159,9 @@ int main(void) {
     pthread_attr_t attr;
     struct passwd *pw;
 
+    if(debug) {
+        fprintf(stderr, "copyd: %s starting\n", rcsid);
+    }
     signal(SIGPIPE, SIG_IGN);
     signal(SIGCLD, SIG_IGN);
 
