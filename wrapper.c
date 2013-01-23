@@ -48,7 +48,7 @@
 #include "cacheopen.c"
 
 static const char rcsid[] = /*Add RCS version string to binary */
-        "$Id: wrapper.c,v 1.19 2009/04/14 18:11:28 source Exp source $";
+        "$Id: wrapper.c,v 1.20 2009/04/15 17:35:02 source Exp source $";
 
 #ifdef USE_COPYD
 typedef struct cachefdinfo_t {
@@ -616,7 +616,9 @@ int chroot(const char *path) {
        since when chdir:ing to some other directory you have to do
        "chdir /" directly afterwards. So we cheat. */
     if(!strcmp(path, ".")) {
-        chdir("/");
+        if(chdir("/") < 0) {
+            perror("httpcacheopen: chdir /");
+        }
     }
 
 #ifdef DEBUG
@@ -1586,6 +1588,10 @@ out:
  */
 #endif /* USE_COPYD */
 
+
+void _httpcacheopen_wrapper_dummy_keep_rcsid_string(void) {
+    fprintf(stderr, "%s", rcsid);
+}
 
 /*
 vim:ts=4:et:sw=4:
