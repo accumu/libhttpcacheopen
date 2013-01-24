@@ -1,4 +1,4 @@
-# $Id: Makefile,v 1.3 2008/05/12 07:21:09 source Exp source $
+# $Id: Makefile,v 1.4 2009/04/08 07:16:35 source Exp source $
 uname := $(shell uname)
 
 LIBCFLAGS = -DUSE_COPYD
@@ -42,10 +42,10 @@ $(BINOBJECTS): copyd.c $(BINDEPS)
 	$(CC) $(CFLAGS) $(BINCFLAGS) $(LDFLAGS) -o $@ copyd.c
 
 libhttpcacheopen.so: wrapper.c $(LIBDEPS)
-	$(LIBCC) $(CFLAGS) $(LIBFLAGS) $(LDFLAGS) -o $@ $(LIBS) wrapper.c
+	$(LIBCC) $(CFLAGS) $(LIBFLAGS) $(LDFLAGS) -o $@ wrapper.c $(LIBS)
 
 libhttpcacheopen.debug.so: wrapper.c $(LIBDEPS)
-	$(LIBCC) -DDEBUG $(CFLAGS) $(LIBFLAGS) $(LDFLAGS) -o $@ $(LIBS) wrapper.c
+	$(LIBCC) -DDEBUG $(CFLAGS) $(LIBFLAGS) $(LDFLAGS) -o $@ wrapper.c $(LIBS)
 
 # 32/64bit variants (currently only AIX)
 libhttpcacheopen.32.so: wrapper.c $(LIBDEPS)
