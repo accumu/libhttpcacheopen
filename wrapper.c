@@ -48,7 +48,7 @@
 #include "cacheopen.c"
 
 static const char rcsid[] = /*Add RCS version string to binary */
-        "$Id: wrapper.c,v 1.20 2009/04/15 17:35:02 source Exp source $";
+        "$Id: wrapper.c,v 1.21 2013/01/23 21:54:48 source Exp source $";
 
 #ifdef USE_COPYD
 typedef struct cachefdinfo_t {
@@ -399,6 +399,68 @@ int open64(const char *path, int oflag, /* mode_t mode */...){
     else {
         tmp = open(path, oflag);
     }
+
+    return tmp;
+}
+
+
+int __open(const char *path, int oflag, /* mode_t mode */...){
+    int tmp;
+    va_list ap;
+    mode_t mode;
+
+    if(oflag & O_CREAT) {
+        va_start(ap, oflag);
+        mode = va_arg(ap, mode_t);
+        va_end(ap);
+        tmp = open(path, oflag, mode);
+    }
+    else {
+        tmp = open(path, oflag);
+    }
+
+    return tmp;
+}
+
+
+int __open64(const char *path, int oflag, /* mode_t mode */...){
+    int tmp;
+    va_list ap;
+    mode_t mode;
+
+    oflag |= O_LARGEFILE;
+
+    if(oflag & O_CREAT) {
+        va_start(ap, oflag);
+        mode = va_arg(ap, mode_t);
+        va_end(ap);
+        tmp = open(path, oflag, mode);
+    }
+    else {
+        tmp = open(path, oflag);
+    }
+
+    return tmp;
+}
+
+
+/* New in glibc 2.7 */
+int __open64_2(const char *path, int oflag) {
+    int tmp;
+
+    oflag |= O_LARGEFILE;
+
+    tmp = open(path, oflag);
+
+    return tmp;
+}
+
+
+/* New in glibc 2.7 */
+int __open_2(const char *path, int oflag) {
+    int tmp;
+
+    tmp = open(path, oflag);
 
     return tmp;
 }
