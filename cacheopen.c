@@ -1,6 +1,6 @@
 
 static const char cacheopenrcsid[] = /*Add RCS version string to binary */
-        "$Id: cacheopen.c,v 1.11 2012/08/25 15:21:32 source Exp source $";
+        "$Id: cacheopen.c,v 1.12 2013/01/23 21:56:40 source Exp source $";
 
 #include <sys/types.h>
 #include <utime.h>
@@ -10,6 +10,9 @@ static const char cacheopenrcsid[] = /*Add RCS version string to binary */
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
+#ifdef __linux
+#include <linux/falloc.h>
+#endif /* __linux */
 
 
 #include "md5.c"
@@ -204,9 +207,27 @@ static copy_status copy_file(int srcfd, int srcflags, off64_t len,
 
     /* We expect sequential IO */
     err=posix_fadvise(srcfd, 0, 0, POSIX_FADV_SEQUENTIAL);
+#ifdef DEBUG
     if(err) {
         fprintf(stderr, "posix_fadvise: %s\n", strerror(err));
     }
+#endif
+
+#ifdef __linux
+    /* Use Linux fallocate() to preallocate file */
+    if(len > 0) {
+        if(fallocate(destfd, FALLOC_FL_KEEP_SIZE, 0, len) != 0) {
+#ifdef DEBUG
+                perror("copy_file: fallocate");
+#endif
+                /* Only choke on relevant errors */
+                if(errno == EBADF || errno == EIO || errno == ENOSPC) {
+                    rc = COPY_FAIL;
+                    goto exit;
+                }
+        }
+    }
+#endif /* __linux */
 
     srcoff=0;
     i=0;
@@ -248,17 +269,21 @@ static copy_status copy_file(int srcfd, int srcflags, off64_t len,
         }
         /* We will never need this segment again */
         err=posix_fadvise(srcfd, srcoff, amt, POSIX_FADV_DONTNEED);
+#ifdef DEBUG
         if(err) {
             fprintf(stderr, "posix_fadvise: %s\n", strerror(err));
         }
+#endif
         srcoff += amt;
         if(len-amt > 0) {
-            /* Tell kernel that we'll need the next segment soon */
-            err=posix_fadvise(srcfd, srcoff, CPBUFSIZE, POSIX_FADV_WILLNEED);
+            /* Tell kernel that we'll need more segments soon */
+            err=posix_fadvise(srcfd, srcoff, 2*CPBUFSIZE, POSIX_FADV_WILLNEED);
+#ifdef DEBUG
             if(err) {
                 fprintf(stderr, "posix_fadvise: %s\n", strerror(err));
             }
-            }
+#endif
+        }
         done = 0;
         while(amt > 0) {
             wrt = write(destfd, buf+done, amt);
