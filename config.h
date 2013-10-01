@@ -2,12 +2,16 @@
 #define _CACHE_CONFIG_H
 
 static const char configrcsid[] = /*Add RCS version string of config */
-        "$Id: config.h,v 1.3 2008/08/10 10:19:39 source Exp source $";
+        "$Id: config.h,v 1.4 2008/11/01 21:48:37 source Exp source $";
 
 /* Check status every N iterations while copying a file */
 #define CPCHKINTERVAL           20
 
 #define CPBUFSIZE               262144
+
+/* Size of window to flush when writing */
+#define CACHE_WRITE_FLUSH_WINDOW 8388608
+
 #define CACHE_UPDATE_TIMEOUT    30      /* Note! In seconds! */
 #define MAX_COPY_SIZE           10000000
 #define DIRLENGTH               1

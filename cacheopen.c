@@ -1,6 +1,6 @@
 
 static const char cacheopenrcsid[] = /*Add RCS version string to binary */
-        "$Id: cacheopen.c,v 1.12 2013/01/23 21:56:40 source Exp source $";
+        "$Id: cacheopen.c,v 1.13 2013/09/13 23:21:59 source Exp source $";
 
 #include <sys/types.h>
 #include <utime.h>
@@ -173,7 +173,7 @@ static copy_status copy_file(int srcfd, int srcflags, off64_t len,
     int                 destfd, modflags, i, err;
     char                *buf;
     ssize_t             amt, wrt, done;
-    off64_t             srcoff;
+    off64_t             srcoff, destoff, flushoff;
     copy_status         rc = COPY_OK;
 
     destfd = open_new_file(destfile, openfunc, statfunc);
@@ -230,6 +230,8 @@ static copy_status copy_file(int srcfd, int srcflags, off64_t len,
 #endif /* __linux */
 
     srcoff=0;
+    destoff=0;
+    flushoff=0;
     i=0;
     while(len > 0) {
         if(i++ >= CPCHKINTERVAL) {
@@ -298,8 +300,35 @@ static copy_status copy_file(int srcfd, int srcflags, off64_t len,
                 goto exit;
             }
             done += wrt;
+            destoff += wrt;
             amt -= wrt;
             len -= wrt;
+        }
+        if(destoff - flushoff >= CACHE_WRITE_FLUSH_WINDOW) {
+            /* Start flushing the current write window */
+            if(sync_file_range(destfd, flushoff, destoff - flushoff,
+                        SYNC_FILE_RANGE_WRITE) != 0)
+            {   
+                rc = COPY_FAIL;
+                goto exit;
+            }
+            /* Wait for the previous window to be written to disk before
+               continuing. This is to prevent the disk write queues to be
+               chock full if incoming data rate is higher than the disks can
+               handle, which will cause horrible read latencies for other
+               requests while handling writes for this one */
+            if(flushoff >= CACHE_WRITE_FLUSH_WINDOW) {
+                if(sync_file_range(destfd, flushoff-CACHE_WRITE_FLUSH_WINDOW,
+                            CACHE_WRITE_FLUSH_WINDOW,
+                            SYNC_FILE_RANGE_WAIT_BEFORE | SYNC_FILE_RANGE_WRITE | SYNC_FILE_RANGE_WAIT_AFTER)
+                        != 0)
+                {   
+                    rc = COPY_FAIL;
+                    goto exit;
+                }
+            }
+
+            flushoff = destoff;
         }
     }
 
