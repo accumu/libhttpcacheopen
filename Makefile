@@ -62,7 +62,7 @@ libhttpcacheopen.debug.64.so: wrapper.c $(LIBDEPS)
 
 version: $(LIBOBJECTS) $(BINOBJECTS)
 	@echo ""
-	@echo libhttpcacheopen version $(shell ident $(LIBOBJECTS) $(BINOBJECTS) | awk '/Id:/ {print $$4}' | tr -d / | sort -rn | head -1) for $(uname) $(shell accarchname.sh) built successfully.
+	@echo libhttpcacheopen version $(shell ident $(LIBOBJECTS) $(BINOBJECTS) | awk '/Id:/ {print $$4}' | tr -d / | sort -rn | head -1) for $(uname) $(shell lsb_release -sd) built successfully.
 
 
 clean:
