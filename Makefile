@@ -35,7 +35,7 @@ BINDEPS := md5.c cleanpath.c cacheopen.c config.h Makefile
 
 LIBDEPS := $(BINDEPS)
 
-all: $(BINOBJECTS) $(LIBOBJECTS) version
+all: $(BINOBJECTS) $(LIBOBJECTS)
 
 # Targets
 $(BINOBJECTS): copyd.c $(BINDEPS)
@@ -60,6 +60,7 @@ libhttpcacheopen.64.so: wrapper.c $(LIBDEPS)
 libhttpcacheopen.debug.64.so: wrapper.c $(LIBDEPS)
 	$(LIBCC) -q64 -DDEBUG $(CFLAGS) $(LIBFLAGS) $(LDFLAGS) -o $@ $(LIBS) wrapper.c
 
+# version target was tailored for RCS, need to figure out something for git.
 version: $(LIBOBJECTS) $(BINOBJECTS)
 	@echo ""
 	@echo libhttpcacheopen version $(shell ident $(LIBOBJECTS) $(BINOBJECTS) | awk '/Id:/ {print $$4}' | tr -d / | sort -rn | head -1) for $(uname) $(shell lsb_release -sd) built successfully.
