@@ -25,7 +25,7 @@ GITVER=-DGIT_SOURCE_DESC='"$(shell git describe --tags --always --dirty)"'
 ifneq ($(uname),AIX)
 	CC := gcc -pthread
 	LIBCC := gcc
-	CFLAGS := -std=c99 -W -Wall $(EXTRACFLAGS) $(OPT) $(GITVER)
+	CFLAGS := -std=c99 -W -Wall -Wextra $(EXTRACFLAGS) $(OPT) $(GITVER)
 	LDFLAGS :=
 	LIBFLAGS := -fPIC -shared -nostdlib -shared $(LIBCFLAGS)
 	LIBS := -lgcc -lc -ldl
