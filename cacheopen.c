@@ -223,11 +223,11 @@ static copy_status copy_file(int srcfd, int srcflags, off64_t len,
 
     /* We expect sequential IO */
     err=posix_fadvise(srcfd, 0, 0, POSIX_FADV_SEQUENTIAL);
-#ifdef DEBUG
     if(err) {
+#ifdef DEBUG
         fprintf(stderr, "posix_fadvise: %s\n", strerror(err));
-    }
 #endif
+    }
 
 #ifdef __linux
     /* Use Linux fallocate() to preallocate file */
