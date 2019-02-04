@@ -15,8 +15,10 @@
  */
 
 
-static const char rcsid[] = /*Add RCS version string to binary */
-        "$Id: copyd.c,v 1.8 2012/08/25 08:15:08 source Exp source $";
+/* Emulate RCS $Id$, simply because it's handy to be able to run ident
+      on an executable/library/etc and see the version.
+       */
+static const char rcsid[] = "$Id: httpcachecopyd " GIT_SOURCE_DESC " $";
 
 #define _GNU_SOURCE 1
 #define _XOPEN_SOURCE 600

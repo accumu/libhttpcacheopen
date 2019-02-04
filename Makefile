@@ -1,6 +1,6 @@
 # $Id: Makefile,v 1.4 2009/04/08 07:16:35 source Exp source $
 #
-# Copyright 2006-2017 Niklas Edmundsson <nikke@acc.umu.se>
+# Copyright 2006-2019 Niklas Edmundsson <nikke@acc.umu.se>
 # 
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,12 +19,13 @@ uname := $(shell uname)
 
 LIBCFLAGS = -DUSE_COPYD
 OPT = -g -O2
+GITVER=-DGIT_SOURCE_DESC='"$(shell git describe --tags --always --dirty)"'
 
 # Setup variables
 ifneq ($(uname),AIX)
 	CC := gcc -pthread
 	LIBCC := gcc
-	CFLAGS := -std=c99 -W -Wall $(EXTRACFLAGS) $(OPT)
+	CFLAGS := -std=c99 -W -Wall $(EXTRACFLAGS) $(OPT) $(GITVER)
 	LDFLAGS :=
 	LIBFLAGS := -fPIC -shared -nostdlib -shared $(LIBCFLAGS)
 	LIBS := -lgcc -lc -ldl
@@ -32,7 +33,7 @@ ifneq ($(uname),AIX)
 else
 	CC := xlc_r
 	LIBCC := xlc
-	CFLAGS := -qstrict_induction $(EXTRACFLAGS) $(OPT)
+	CFLAGS := -qstrict_induction $(EXTRACFLAGS) $(OPT) $(GITVER)
 	LDFLAGS := -brtl
 	LIBFLAGS := -bexpall -bM:SRE -bnoentry $(LIBCFLAGS)
 	LIBS :=
@@ -75,12 +76,6 @@ libhttpcacheopen.64.so: wrapper.c $(LIBDEPS)
 
 libhttpcacheopen.debug.64.so: wrapper.c $(LIBDEPS)
 	$(LIBCC) -q64 -DDEBUG $(CFLAGS) $(LIBFLAGS) $(LDFLAGS) -o $@ $(LIBS) wrapper.c
-
-# version target was tailored for RCS, need to figure out something for git.
-version: $(LIBOBJECTS) $(BINOBJECTS)
-	@echo ""
-	@echo libhttpcacheopen version $(shell ident $(LIBOBJECTS) $(BINOBJECTS) | awk '/Id:/ {print $$4}' | tr -d / | sort -rn | head -1) for $(uname) $(shell lsb_release -sd) built successfully.
-
 
 clean:
 	rm -f $(BINOBJECTS) libhttpcacheopen*.so

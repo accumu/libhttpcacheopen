@@ -18,9 +18,6 @@
 #ifndef _CACHE_CONFIG_H
 #define _CACHE_CONFIG_H
 
-static const char configrcsid[] = /*Add RCS version string of config */
-        "$Id: config.h,v 1.4 2008/11/01 21:48:37 source Exp source $";
-
 /* Check status every N iterations while copying a file */
 #define CPCHKINTERVAL           20
 

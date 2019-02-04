@@ -15,10 +15,6 @@
  */
 
 
-static const char cleanpathrcsid[] = /*Add RCS version string to binary */
-        "$Id: cleanpath.c,v 1.2 2006/11/20 17:37:45 source Exp source $";
-
-
 /* Clean an absolute path from //, .. and . */
 static void cleanpath(char * path) {
     int         i;

@@ -64,8 +64,10 @@
 #include "cleanpath.c"
 #include "cacheopen.c"
 
-static const char rcsid[] = /*Add RCS version string to binary */
-        "$Id: wrapper.c,v 1.21 2013/01/23 21:54:48 source Exp source $";
+/* Emulate RCS $Id$, simply because it's handy to be able to run ident
+   on an executable/library/etc and see the version.
+ */
+static const char rcsid[] = "$Id: libhttpcacheopen " GIT_SOURCE_DESC " $";
 
 #ifdef USE_COPYD
 typedef struct cachefdinfo_t {
