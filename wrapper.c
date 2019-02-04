@@ -217,12 +217,6 @@ int open(const char *path, int oflag, /* mode_t mode */...) {
     char                realpath[PATH_MAX], cachepath[PATH_MAX];
     time_t              starttime=0;
 
-
-    if(!path) {
-        errno = ENOENT;
-        return -1;
-    }
-
 #ifdef DEBUG
     fprintf(stderr, "open: path=%s\n", path);
 #endif
