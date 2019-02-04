@@ -1,4 +1,3 @@
-# $Id: Makefile,v 1.4 2009/04/08 07:16:35 source Exp source $
 #
 # Copyright 2006-2019 Niklas Edmundsson <nikke@acc.umu.se>
 # 
