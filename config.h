@@ -48,8 +48,9 @@ static const int  backend_len       = sizeof(backend_root)-1;
 static const char cache_root[]      = "/httpcache/";
 static const int  cache_len         = sizeof(cache_root)-1;
 
-/* Breakpoint for large files to be put in different cache hierarchy */
-#define CACHE_BF_SIZE               (250*1024*1024)
+/* Breakpoint for large files to be put in different cache hierarchy.
+   If used together with redirprg, keep in sync with minredirsize. */
+#define CACHE_BF_SIZE               4194304
 
 static const char bfcache_root[]    = "/httpcachebf/";
 static const int  bfcache_len       = sizeof(bfcache_root)-1;
