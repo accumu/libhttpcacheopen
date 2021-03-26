@@ -27,12 +27,18 @@
 #define CACHE_WRITE_FLUSH_WINDOW 8388608
 
 #define CACHE_UPDATE_TIMEOUT    30      /* Note! In seconds! */
-#define MAX_COPY_SIZE           10000000
+
+/* Breakpoint between copying while file before serving it, or dispatch
+   copying to copyd and do read-while-caching */
+#define MAX_COPY_SIZE           (30*1024*1024) /* in bytes */
+
 #define DIRLENGTH               1
 #define DIRLEVELS               2
 #define CACHE_BODY_SUFFIX       ".body"
 
-#define CACHE_LOOP_SLEEP        200 /* in ms, lower than 1s */
+/* How long to sleep between retries while looping and waiting for either
+   a file or data in file when doing read-while-caching. */
+#define CACHE_LOOP_SLEEP        50 /* in ms, lower than 1s */
 
 #ifdef USE_COPYD
 #define CACHE_MAXFD             32768
