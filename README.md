@@ -45,8 +45,7 @@ a cache outside of the chroot would be impossible!
 
 Once upon a time built and used on AIX, Solaris and Linux.
 
-Recently only built and used on Ubuntu Linux 64bit flavours, at the
-time of this writing Ubuntu 14.04 LTS and older.
+Recently only built and used on Ubuntu Linux 64bit flavours.
 
 `make`
 
