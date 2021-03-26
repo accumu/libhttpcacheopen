@@ -46,7 +46,7 @@
 
 #define COPYD_USER              "www-ftp"
 
-#define SOCKPATH                "/var/run/.cachecopyd.sock"
+#define SOCKPATH                "/run/.cachecopyd.sock"
 
 static const char backend_root[]    = "/export/ftp/";
 static const int  backend_len       = sizeof(backend_root)-1;
